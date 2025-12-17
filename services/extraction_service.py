@@ -98,7 +98,7 @@ class ExtractionService:
                 site_for_lock = None
         # Si no podemos determinar el sitio, seguimos sin lock para no bloquear funcionalidad
         if site_for_lock:
-            with site_operation_lock(site_for_lock, "scrape", timeout_seconds=60):
+            with site_operation_lock(site_for_lock, "scrape", timeout_seconds=60, stale_seconds=300):
                 return self._extract_from_urls_impl(
                     urls,
                     follow_pagination=follow_pagination,
@@ -199,14 +199,46 @@ class ExtractionService:
         site = None
         history_data = None
         if urls:
-            # Determinar sitio desde la primera URL
+            # Determinar sitios presentes
             from urllib.parse import urlparse
-            parsed = urlparse(urls[0])
-            site = parsed.netloc.replace("www.", "") if parsed.netloc else parsed.path.split('/')[0]
-            
+            unique_sites = set()
+            for u in urls:
+                p = urlparse(u)
+                unique_sites.add(p.netloc.replace("www.", "") if p.netloc else p.path.split('/')[0])
+
+            if len(unique_sites) > 1:
+                msg = (
+                    f"⚠️ URLs pertenecen a múltiples dominios: {sorted(unique_sites)}. "
+                    "Ejecuta el scraping por sitio (una corrida por dominio) para evitar mezclas y demoras."
+                )
+                logger.warning(msg)
+                if status_callback:
+                    status_callback(msg)
+                return []
+
+            # Dominio único
+            site = next(iter(unique_sites))
+
+            # Filtrar URLs que no correspondan al dominio base (defensivo)
+            filtered_urls = []
+            for original_url in urls:
+                p = urlparse(original_url)
+                candidate_site = p.netloc.replace("www.", "") if p.netloc else p.path.split('/')[0]
+                if candidate_site == site:
+                    filtered_urls.append(original_url)
+                else:
+                    logger.warning(
+                        f"⚠️ URL omitida por dominio distinto: {original_url} (esperado {site}, recibido {candidate_site})"
+                    )
+            urls = filtered_urls
+            total_urls = len(urls)
+            if total_urls == 0:
+                logger.warning("No hay URLs después de filtrar por dominio; cancelando extracción.")
+                return []
+
             if status_callback:
                 status_callback(f"📚 Cargando historial de {site}...")
-            
+
             history_data = self.history_manager.load_history(site)
             existing_count = len(history_data.get("concursos", []))
             if existing_count > 0:

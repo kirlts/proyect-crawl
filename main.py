@@ -1294,26 +1294,26 @@ with tab3:
         max_pages = st.number_input("Máximo de páginas", min_value=1, max_value=100, value=2) if follow_pagination else 1
         debug_mode = st.checkbox("Modo Debug", value=False)
     
-    # Selección de sitios para scraping
-    st.subheader("🌐 Seleccionar Sitios para Scraping")
-    selected_sites_for_scraping = st.multiselect(
-        "Sitios a procesar:",
-        options=list(SEED_URLS.keys()),
-        default=[]
+    # Selección de sitio único para scraping
+    st.subheader("🌐 Seleccionar Sitio para Scraping (uno a la vez)")
+    available_scrape_sites = list(SEED_URLS.keys())
+    selected_site_for_scraping = st.selectbox(
+        "Sitio a procesar:",
+        options=["(elige un sitio)"] + available_scrape_sites,
+        index=0
     )
     
     # URLs personalizadas
     custom_urls = st.text_area(
         "URLs adicionales (una por línea):",
         height=100,
-        help="Agrega URLs personalizadas además de los sitios seleccionados"
+        help="Agrega URLs personalizadas además del sitio seleccionado (debe ser el mismo dominio)"
     )
     
     # Construir lista de URLs
     urls_to_process = []
-    if selected_sites_for_scraping:
-        for site in selected_sites_for_scraping:
-            urls_to_process.extend(SEED_URLS[site])
+    if selected_site_for_scraping and selected_site_for_scraping != "(elige un sitio)":
+        urls_to_process.extend(SEED_URLS[selected_site_for_scraping])
     if custom_urls:
         urls_to_process.extend([url.strip() for url in custom_urls.split("\n") if url.strip()])
     
@@ -1479,6 +1479,15 @@ with tab3:
             # Forzar actualización automática de la tab de exploración
             st.rerun()
             
+        except RuntimeError as e:
+            # Errores como lock concurrente
+            error_msg = str(e)
+            status_callback(f"⚠️ {error_msg}")
+            try:
+                update_ui()
+            except Exception as ui_error:
+                logger.warning(f"Error al actualizar UI: {ui_error}")
+            st.warning(f"⚠️ {error_msg}")
         except Exception as e:
             # Capturar información completa del error
             import traceback

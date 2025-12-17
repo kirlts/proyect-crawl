@@ -655,7 +655,7 @@ items: List[PrediccionConcursoBatchItem]  # Lista de predicciones
 ### Flujo Principal: Extracción de Concursos
 
 ```
-1. Usuario ingresa URLs en UI (main.py)
+1. Usuario ingresa URLs en UI (main.py) — ahora se selecciona **un solo sitio** por corrida para evitar mezclas de dominios.
    ↓
 2. ExtractionService.extract_from_urls()
    ├─→ Fase 1: Scraping de páginas principales (delegado a estrategia)
@@ -1236,6 +1236,8 @@ Orden:
 - Scraper salta waits pesados cuando la estrategia es CentroEstudios (evita demoras >1 min).
 - Predicciones: UI permite concursos cerrados sin `previous_concursos` cuando el dominio está habilitado (CentroEstudios) para permitir predicción anual determinista.
 - Cache e historial guardan siempre HTML/MD completos del concurso único de CentroEstudios.
+- UI de scraping ahora forza **un solo sitio por corrida** y el servicio filtra URLs de dominios distintos para evitar mezclas.
+- Locks de scraping: se consideran obsoletos a los 5 minutos (`stale_seconds=300`) para limpiar locks viejos automáticamente.
 
 ### v4.3 - Resiliencia ante concurrencia scraping/predicción (2025-12-16)
 
