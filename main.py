@@ -1413,14 +1413,22 @@ with tab3:
         else:
             with st.spinner("Ejecutando scraping..."):
                 try:
-                    result = extraction_service.extract_from_urls(
+                    # Crear servicio de extracción
+                    key_manager = st.session_state.api_key_manager
+                    selected_model = GEMINI_CONFIG.get("model", "gemini-2.5-flash-lite")
+                    extraction_service = ExtractionService(
+                        api_key_manager=key_manager,
+                        model_name=selected_model
+                    )
+                    
+                    concursos = extraction_service.extract_from_urls(
                         urls=urls_to_process,
                         follow_pagination=follow_pagination,
-                        max_pages=max_pages,
-                        debug_mode=debug_mode
+                        max_pages=max_pages
                     )
-                    st.success("✅ Scraping completado")
-                    st.json(result.get("summary", {}))
+                    st.success(f"✅ Scraping completado: {len(concursos)} concursos extraídos")
+                    if concursos:
+                        st.info(f"💡 Ve a la pestaña 'Explorar Concursos' para ver los resultados")
                 except RuntimeError as e:
                     st.warning(str(e))
                 except Exception as e:
