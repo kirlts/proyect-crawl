@@ -5,6 +5,7 @@ Interfaz rediseñada: separa scraping de visualización de información
 """
 
 import streamlit as st
+from urllib.parse import urlparse
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -726,6 +727,8 @@ with tab2:
                 if hc.get("url")
             }
             
+            special_domains_allow_without_previous = {"centroestudios.mineduc.cl"}
+            
             # Filtrar concursos que tienen previous_concursos (versiones anteriores)
             concursos_con_versiones_previas = []
             for concurso in closed_concursos:
@@ -739,6 +742,14 @@ with tab2:
                     previous_concursos = hist_concurso.get("previous_concursos", [])
                     # Solo incluir si tiene versiones anteriores (lista no vacía)
                     if previous_concursos:
+                        concursos_con_versiones_previas.append(concurso)
+                    else:
+                        domain = urlparse(concurso_url).netloc.replace("www.", "")
+                        if domain in special_domains_allow_without_previous:
+                            concursos_con_versiones_previas.append(concurso)
+                else:
+                    domain = urlparse(concurso_url).netloc.replace("www.", "")
+                    if domain in special_domains_allow_without_previous:
                         concursos_con_versiones_previas.append(concurso)
             
             # Aplicar filtros para mostrar preview

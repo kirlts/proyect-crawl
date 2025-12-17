@@ -104,6 +104,10 @@ def _register_all_strategies():
         from crawler.strategies.anid_strategy import ANIDStrategy
         register_strategy("anid.cl", ANIDStrategy)
         register_strategy("www.anid.cl", ANIDStrategy)
+        # Importar Centro Estudios MINEDUC
+        from crawler.strategies.centro_estudios_strategy import CentroEstudiosStrategy
+        register_strategy("centroestudios.mineduc.cl", CentroEstudiosStrategy)
+        register_strategy("www.centroestudios.mineduc.cl", CentroEstudiosStrategy)
     except ImportError:
         # Las estrategias específicas pueden no estar disponibles aún
         pass

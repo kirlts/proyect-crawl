@@ -14,7 +14,7 @@ SEED_URLS = {
         # Excluir capital humano según especificación
     ],
     "Centro Estudios MINEDUC": [
-        "https://centroestudios.mineduc.cl/",
+        "https://centroestudios.mineduc.cl/fondo-de-investigacion-y-desarrollo-en-educacion/",
     ],
     "CNA": [
         "https://www.cnachile.cl/",
@@ -70,8 +70,12 @@ SITE_CONFIGS: Dict[str, Dict[str, Any]] = {
     # Configuraciones genéricas para otros sitios (se pueden sobrescribir con estrategias específicas)
     "centroestudios.mineduc.cl": {
         "display_name": "Centro Estudios MINEDUC",
-        "organismo": "MINEDUC",
-        "crawler_config": {},
+        "organismo": "Centro de Estudios MINEDUC",
+        "crawler_config": {
+            "wait_for": "css:body",
+            "wait_until": "domcontentloaded",
+            "scan_full_page": True,
+        },
         "features": {
             "dynamic_pagination": False,
             "has_previous_concursos": False,

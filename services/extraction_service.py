@@ -20,11 +20,12 @@ from crawler import WebScraper
 from crawler.markdown_processor import clean_markdown_for_llm
 from crawler.batch_processor import create_batches
 from crawler.strategies import get_strategy_for_url
+from crawler.strategies.centro_estudios_strategy import CentroEstudiosStrategy
 from llm.extractors.llm_extractor import LLMExtractor
 from models import Concurso
 from config import CRAWLER_CONFIG, EXTRACTION_CONFIG, GEMINI_CONFIG
 from utils.history_manager import HistoryManager
-from utils.file_manager import save_page_cache, load_page_cache, save_debug_info_scraping
+from utils.file_manager import save_page_cache, load_page_cache, save_debug_info_scraping, save_results
 from utils.lock_manager import site_operation_lock
 # NOTA: extract_previous_concursos_from_html ahora se usa a través de estrategias
 # Se mantiene comentado para referencia, pero ya no se usa directamente
@@ -137,10 +138,12 @@ class ExtractionService:
         Returns:
             Lista de concursos extraídos y validados
         """
+        primary_strategy = get_strategy_for_url(urls[0]) if urls else None
         # Inicializar información de debug
+        start_time = datetime.now()
         debug_info = {
             "execution": {
-                "start_time": datetime.now().isoformat(),
+                "start_time": start_time.isoformat(),
                 "urls": urls,
                 "follow_pagination": follow_pagination,
                 "max_pages": max_pages,
@@ -330,6 +333,91 @@ class ExtractionService:
         if status_callback:
             status_callback("Agrupando contenido para el LLM...")
         
+        # Atajo determinista para Centro Estudios MINEDUC (FONIDE): sin LLM
+        if isinstance(primary_strategy, CentroEstudiosStrategy):
+            if not all_page_contents:
+                logger.warning("No hay contenido para centroestudios.mineduc.cl")
+                return []
+            page = all_page_contents[0]
+            md = page.get("markdown") or page.get("content") or ""
+            html = page.get("html", "")
+            page_url = page.get("url", urls[0] if urls else "")
+            import re
+
+            def _find_date(patterns, text):
+                months = {
+                    "enero": "01", "febrero": "02", "marzo": "03", "abril": "04",
+                    "mayo": "05", "junio": "06", "julio": "07", "agosto": "08",
+                    "septiembre": "09", "setiembre": "09", "octubre": "10",
+                    "noviembre": "11", "diciembre": "12",
+                }
+                for pat in patterns:
+                    m = re.search(pat, text, re.IGNORECASE)
+                    if m:
+                        dia = int(m.group(1))
+                        mes_str = m.group(2).lower()
+                        anio = int(m.group(3))
+                        mes = months.get(mes_str)
+                        if mes:
+                            return f"{anio:04d}-{mes}-{dia:02d}"
+                return None
+
+            # Bloque focal: Convocatoria actual
+            block_match = re.search(
+                r"###\s*Convocatoria actual.*?(Bases de postulación|Bases de postulaci[oó]n)",
+                md,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            focal_block = block_match.group(0) if block_match else ""
+
+            fecha_cierre = _find_date(
+                [r"postulaciones.*?hasta el\s+(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})"],
+                focal_block or md,
+            )
+            fecha_apertura = _find_date(
+                [r"consultas.*?hasta el\s+(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})"],
+                focal_block or md,
+            )
+
+            # Nombre dinámico por si cambia FONIDE 16/17/...
+            nombre_match = re.search(r"Convocatoria actual\s*\(([^)]+)\)", md, re.IGNORECASE)
+            nombre = (
+                f"Fondo de Investigación y Desarrollo en Educación ({nombre_match.group(1)})"
+                if nombre_match
+                else "Fondo de Investigación y Desarrollo en Educación (FONIDE)"
+            )
+
+            concurso = Concurso(
+                nombre=nombre,
+                url=page_url,
+                organismo="Centro de Estudios MINEDUC",
+                fecha_apertura=fecha_apertura,
+                fecha_cierre=fecha_cierre,
+                estado="Cerrado",
+                descripcion="Concurso FONIDE del Centro de Estudios MINEDUC; fecha límite indicada en la sección Documentos FONIDE 16.",
+                subdireccion=None,
+                financiamiento=None,
+            )
+            save_page_cache(site=primary_strategy.site_name, url=page_url, html=html, markdown=md)
+            enriched_content = {page_url: {"markdown": md, "html": html}}
+            history_update = self.history_manager.update_history(
+                site=primary_strategy.site_name,
+                concursos=[concurso],
+                enriched_content=enriched_content
+            )
+            self.history_manager.save_history(primary_strategy.site_name, history_update)
+            debug_info["extraction"]["concursos_found"] = 1
+            debug_info["extraction"]["concursos_after_dedup"] = 1
+            debug_info["scraping"]["pages_scraped"] = len(all_page_contents)
+            debug_info["scraping"]["pages_failed"] = debug_info["scraping"].get("pages_failed", 0)
+            debug_info["execution"]["end_time"] = datetime.now().isoformat()
+            debug_info["execution"]["duration_seconds"] = (
+                datetime.now() - start_time
+            ).total_seconds()
+            save_debug_info_scraping(debug_info)
+            logger.info("✅ Extracción determinista completada para Centro Estudios MINEDUC (FONIDE) sin LLM.")
+            return [concurso]
+
         batch_size = self.extraction_config.get("batch_size", 500000)
         batches = create_batches(all_page_contents, batch_size=batch_size)
         logger.info(f"Creadas {len(batches)} batches para {len(all_page_contents)} páginas")
@@ -1284,8 +1372,6 @@ class ExtractionService:
         
         # Guardar archivo de debug (incluyendo contenido raw y procesado)
         try:
-            from utils.file_manager import save_debug_info_scraping, save_results
-            
             # Obtener último archivo raw generado
             last_raw_file = debug_info["llm"]["raw_files"][-1] if debug_info["llm"]["raw_files"] else None
             raw_content = None
@@ -1956,6 +2042,13 @@ class ExtractionService:
         
         # Obtener estrategia apropiada para la URL
         strategy = get_strategy_for_url(url)
+        
+        if isinstance(strategy, CentroEstudiosStrategy):
+            logger.info(f"Sitio {strategy.site_name}: forzando una sola página (sin paginación).")
+            result = asyncio.run(self.scraper.scrape_url(url))
+            if result.get("success"):
+                return [result]
+            return []
         
         if follow_pagination and strategy.supports_dynamic_pagination():
             # Paginación dinámica (requiere JavaScript)

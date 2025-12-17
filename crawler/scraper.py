@@ -98,6 +98,9 @@ class WebScraper:
                 - error: str (mensaje de error si falla)
         """
         try:
+            strategy = get_strategy_for_url(url)
+            is_centro = getattr(strategy, "site_name", "") == "centroestudios.mineduc.cl"
+
             # Configurar el navegador
             browser_config = BrowserConfig(
                 headless=self.headless,
@@ -121,91 +124,66 @@ class WebScraper:
             )
             
             # Configurar el crawler run
-            # NO usar delay_before_return_html - la espera se maneja inteligentemente en el hook
+            # Para CentroEstudios: evitar esperas largas y JS complejo
             scan_full_page = self.config.get("scan_full_page", True)
             wait_until = self.config.get("wait_until", "domcontentloaded")
             wait_for_images = self.config.get("wait_for_images", False)
+            page_timeout = self.page_timeout
             
-            # JavaScript que ESPERA ACTIVAMENTE a que el contenido AJAX se cargue
-            # ANID usa JetEngine/Elementor que carga contenido dinámicamente vía AJAX
-            # El contenido está dentro de elementos con data-elementor-type="jet-listing-items"
-            js_code = """
-            (async () => {
-                // Esperar a que la página esté completamente cargada
-                await new Promise(resolve => { 
-                    if (document.readyState === 'complete') resolve(); 
-                    else window.addEventListener('load', resolve); 
-                });
-                
-                // Función para verificar si los items tienen contenido real
-                const checkItemsHaveContent = () => {
-                    const items = document.querySelectorAll('.jet-listing-grid__item');
-                    if (items.length < 6) {
-                        console.log('Items encontrados:', items.length);
-                        return false;
-                    }
-                    
-                    let itemsWithContent = 0;
-                    items.forEach((item, idx) => {
-                        // Buscar contenido dentro del item (títulos, fechas, etc.)
-                        const text = (item.innerText || item.textContent || '').trim();
-                        const hasElementorContent = item.querySelector('[data-elementor-type="jet-listing-items"]');
-                        const hasTitle = item.querySelector('h1, h2, h3, h4, h5, h6, .elementor-heading-title');
-                        const hasDate = /\\d{1,2}\\s+de\\s+\\w+\\s*,\\s*\\d{4}|\\d{4}-\\d{2}-\\d{2}|noviembre|diciembre|octubre|cierre|apertura|inicio/i.test(text);
-                        const hasLongText = text.length > 100;
-                        const hasImage = item.querySelector('img[src]');
-                        
-                        // El contenido debe tener al menos un título o fecha Y texto largo
-                        if (hasElementorContent && hasLongText && (hasTitle || hasDate || hasImage)) {
-                            itemsWithContent++;
-                            console.log(`Item ${idx} tiene contenido:`, text.substring(0, 80));
-                        }
+            if is_centro:
+                js_code = "return true;"  # sitio estático, no JetEngine
+                wait_until = "domcontentloaded"
+                scan_full_page = True
+                page_timeout = min(self.page_timeout, 15000)
+            else:
+                # JavaScript que ESPERA ACTIVAMENTE a que el contenido AJAX se cargue (ANID)
+                js_code = """
+                (async () => {
+                    await new Promise(resolve => { 
+                        if (document.readyState === 'complete') resolve(); 
+                        else window.addEventListener('load', resolve); 
                     });
-                    
-                    console.log('Total items con contenido:', itemsWithContent, 'de', items.length);
-                    return itemsWithContent >= 6;
-                };
-                
-                // Esperar activamente hasta que tengamos contenido (máximo 30 segundos)
-                const maxWaitTime = 30000; // 30 segundos
-                const checkInterval = 500; // Verificar cada 500ms
-                const startTime = Date.now();
-                
-                while (!checkItemsHaveContent() && (Date.now() - startTime) < maxWaitTime) {
-                    // Scroll para activar lazy loading
-                    window.scrollTo(0, document.body.scrollHeight);
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    window.scrollTo(0, 0);
-                    await new Promise(resolve => setTimeout(resolve, checkInterval));
-                    
-                    // Disparar eventos que JetEngine podría estar esperando
-                    window.dispatchEvent(new Event('resize'));
-                    window.dispatchEvent(new Event('scroll'));
-                    
-                    // Intentar disparar eventos de JetEngine si existen
-                    if (window.jetSmartFilters) {
-                        try { window.jetSmartFilters.trigger('updated'); } catch(e) {}
+                    const checkItemsHaveContent = () => {
+                        const items = document.querySelectorAll('.jet-listing-grid__item');
+                        if (items.length < 6) return false;
+                        let itemsWithContent = 0;
+                        items.forEach((item, idx) => {
+                            const text = (item.innerText || item.textContent || '').trim();
+                            const hasElementorContent = item.querySelector('[data-elementor-type="jet-listing-items"]');
+                            const hasTitle = item.querySelector('h1, h2, h3, h4, h5, h6, .elementor-heading-title');
+                            const hasDate = /\\d{1,2}\\s+de\\s+\\w+\\s*,\\s*\\d{4}|\\d{4}-\\d{2}-\\d{2}|noviembre|diciembre|octubre|cierre|apertura|inicio/i.test(text);
+                            const hasLongText = text.length > 100;
+                            const hasImage = item.querySelector('img[src]');
+                            if (hasElementorContent && hasLongText && (hasTitle || hasDate || hasImage)) {
+                                itemsWithContent++;
+                                console.log(`Item ${idx} tiene contenido:`, text.substring(0, 80));
+                            }
+                        });
+                        return itemsWithContent >= 6;
+                    };
+                    const maxWaitTime = 30000;
+                    const checkInterval = 500;
+                    const startTime = Date.now();
+                    while (!checkItemsHaveContent() && (Date.now() - startTime) < maxWaitTime) {
+                        window.scrollTo(0, document.body.scrollHeight);
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        window.scrollTo(0, 0);
+                        await new Promise(resolve => setTimeout(resolve, checkInterval));
+                        window.dispatchEvent(new Event('resize'));
+                        window.dispatchEvent(new Event('scroll'));
+                        if (window.jetSmartFilters) { try { window.jetSmartFilters.trigger('updated'); } catch(e) {} }
+                        if (window.jetListing) { try { window.jetListing.trigger('updated'); } catch(e) {} }
                     }
-                    if (window.jetListing) {
-                        try { window.jetListing.trigger('updated'); } catch(e) {}
-                    }
-                }
-                
-                // Verificación final
-                const finalCheck = checkItemsHaveContent();
-                console.log('Verificación final - Items con contenido:', finalCheck);
-                
-                // Esperar un poco más para asegurar que todo se renderizó
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            })();
-            """
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                })();
+                """
             
             run_config = CrawlerRunConfig(
                 cache_mode=self.cache_mode,
                 markdown_generator=md_generator,
                 wait_for=self.wait_for,
                 wait_until=wait_until,
-                page_timeout=self.page_timeout,
+                page_timeout=page_timeout,
                 word_count_threshold=self.word_count_threshold,
                 remove_overlay_elements=True,  # Remover modales/popups
                 exclude_external_links=False,  # Mantener todos los links para contexto
@@ -223,6 +201,20 @@ class WebScraper:
             captured_html = None
             
             async with AsyncWebCrawler(config=browser_config) as crawler:
+                # Para CentroEstudios: ejecutar directamente sin hooks de espera costosos
+                if is_centro:
+                    result = await crawler.arun(
+                        url=url,
+                        config=run_config,
+                    )
+                    return {
+                        "success": True,
+                        "markdown": result.markdown if result else "",
+                        "url": result.url if result else url,
+                        "html": result.html if result else "",
+                        "error": None,
+                    }
+
                 # Hook optimizado: espera inteligente basada en estado, no timeouts fijos
                 async def before_retrieve_html_hook(page, context, **kwargs):
                     """Hook que espera inteligentemente a que el contenido AJAX se cargue"""

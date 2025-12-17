@@ -1,4 +1,4 @@
-# Arquitectura del Sistema - Guía Maestra (v4.0)
+# Arquitectura del Sistema - Guía Maestra (v4.4)
 
 > Este documento es la **fuente de verdad** sobre cómo funciona internamente el sistema:
 > scraping, extracción con LLM, predicciones, manejo de historial, depuración, UI y
@@ -127,29 +127,33 @@ proyect-crawl/
 
 #### `crawler/strategies/`
 
-**Responsabilidad**: Sistema de estrategias para manejar diferentes sitios.
+**Responsabilidad**: Sistema de estrategias para manejar diferentes sitios (lógica específica aislada del código genérico).
 
 - **`base_strategy.py`**: Clase abstracta `ScrapingStrategy` que define la interfaz:
   - `site_name`, `site_display_name`: Propiedades del sitio
   - `get_crawler_config()`: Configuración específica de Crawl4AI
   - `supports_dynamic_pagination()`: Indica si requiere paginación dinámica
-  - `scrape_with_pagination()`: Método principal de scraping con paginación
+  - `scrape_with_pagination()`: Método principal de scraping con paginación (o bypass si el sitio es de una sola página)
   - `extract_previous_concursos()`: Extracción de "concursos anteriores" (opcional)
   - `get_organismo_name()`: Nombre del organismo
   - `get_known_subdirecciones()`: Subdirecciones conocidas (opcional)
 
-- **`anid_strategy.py`**: Estrategia específica para ANID:
-  - Usa `AnidPagination` para paginación dinámica JetEngine
-  - Usa `AnidExtractor` para extraer "Concursos anteriores"
-  - Configuración específica: `wait_for: "css:.jet-listing-grid__item"`
-  - Organismo: "ANID"
-  - Subdirecciones conocidas: Capital Humano, Investigación Aplicada, etc.
+- **`anid_strategy.py`** (ANID):
+  - Usa `AnidPagination` para paginación dinámica JetEngine.
+  - Usa `AnidExtractor` para extraer "Concursos anteriores".
+  - Configuración específica: `wait_for: "css:.jet-listing-grid__item"`, waits y JS para contenido AJAX.
+  - Organismo: "ANID". Subdirecciones conocidas: Capital Humano, Investigación Aplicada, etc.
 
-- **`generic_strategy.py`**: Estrategia genérica (fallback):
-  - Para sitios estándar sin lógica específica
-  - Usa paginación tradicional (enlaces HTML)
-  - Configuración básica de Crawl4AI
-  - No extrae "concursos anteriores"
+- **`centro_estudios_strategy.py`** (Centro Estudios MINEDUC / FONIDE):
+  - Sitio estático de una sola página; sin paginación y sin LLM.
+  - Bypass de waits pesados/JS: timeout corto (≈15s), JS trivial, sin esperas JetEngine.
+  - Extracción determinista del bloque “Convocatoria actual (FONIDE NN)”: nombre adaptable (FONIDE 16/17/…), fecha de consultas (apertura) y fecha de postulaciones (cierre).
+  - Guarda HTML/Markdown completos en cache e historial; no hay `previous_concursos` externos.
+
+- **`generic_strategy.py`**:
+  - Fallback para sitios estándar sin lógica específica.
+  - Usa paginación tradicional (enlaces HTML).
+  - Configuración básica de Crawl4AI; no extrae "concursos anteriores".
 
 - **`__init__.py`**: Registro de estrategias:
   - `STRATEGY_REGISTRY`: Diccionario que mapea dominios a clases de estrategia
@@ -654,11 +658,10 @@ items: List[PrediccionConcursoBatchItem]  # Lista de predicciones
 1. Usuario ingresa URLs en UI (main.py)
    ↓
 2. ExtractionService.extract_from_urls()
-   ├─→ Fase 1: Scraping de páginas principales
-   │   ├─→ WebScraper.scrape_url_with_dynamic_pagination() (ANID)
-   │   │   ├─→ Detección automática de última página (verifica botón ">")
-   │   │   └─→ Se detiene automáticamente al alcanzar la última página
-   │   │   o scrape_url_simple() (otros sitios)
+   ├─→ Fase 1: Scraping de páginas principales (delegado a estrategia)
+   │   ├─→ ANID: `scrape_url_with_dynamic_pagination()` (JetEngine), detección robusta de última página por ausencia de botón ">".
+   │   ├─→ CentroEstudios: bypass de paginación, una sola página, timeout corto y sin JS pesado.
+   │   └─→ Otros sitios: paginación tradicional o scraping simple.
    │   ├─→ Limpiar markdown (clean_markdown_for_llm)
    │   └─→ Agrupar en batches (hasta 250,000 caracteres)
    │
@@ -680,9 +683,9 @@ items: List[PrediccionConcursoBatchItem]  # Lista de predicciones
    │
    ├─→ Fase 3: Scraping de páginas individuales
    │   ├─→ Extraer URLs únicas de concursos
-   │   ├─→ WebScraper.scrape_url_simple() (concurrente)
+   │   ├─→ WebScraper.scrape_url_simple() (concurrente; o bypass si la estrategia ya entrega el concurso único, p. ej. CentroEstudios)
    │   ├─→ Guardar HTML/Markdown completos en cache local `data/raw_pages/<site>/...` (sin compresión) y actualizar índice por URL
-   │   ├─→ **OPTIMIZACIÓN: Extracción determinística** (antes de LLM)
+   │   ├─→ **OPTIMIZACIÓN: Extracción determinística** (antes de LLM; 100% determinista si la estrategia lo define)
    │   │   ├─→ Extraer nombre desde <title>, og:title, <h1>
    │   │   ├─→ Extraer fechas desde patrones "Inicio:", "Cierre:"
    │   │   └─→ Detectar suspendido desde URL o contenido
@@ -711,6 +714,7 @@ items: List[PrediccionConcursoBatchItem]  # Lista de predicciones
        ├─→ Extraer previous_concursos de páginas individuales
        │   ├─→ strategy.extract_previous_concursos(html, url)
        │   │   ├─→ ANID: AnidExtractor (selectores JetEngine)
+       │   │   ├─→ CentroEstudios: no hay previous_concursos externos (lista vacía)
        │   │   └─→ Otros: GenericExtractor (retorna [])
        │   ├─→ Extracción mejorada de nombres (filtra "Ver más", busca en atributos)
        │   └─→ Extracción mejorada de años (desde nombre, fechas o URL)
@@ -730,7 +734,7 @@ items: List[PrediccionConcursoBatchItem]  # Lista de predicciones
    ↓
 3. Filtrar concursos no predecibles ANTES de crear batches
    ├─→ Filtrar self_reference (marcar como no predecible con justificación automática)
-   ├─→ Filtrar concursos sin previous_concursos
+   ├─→ Filtrar concursos sin previous_concursos (salvo sitios habilitados explícitamente, e.g. CentroEstudios, que se predice de forma determinista)
    └─→ Resultado: lista de concursos predecibles
    ↓
 4. Agrupar en batches de exactamente 10 concursos predecibles
@@ -770,7 +774,7 @@ items: List[PrediccionConcursoBatchItem]  # Lista de predicciones
 
 - Se guarda el HTML crudo y el Markdown limpio de cada concurso en `data/raw_pages/<site>/<slug>.html/.md` (sin compresión).
 - Índice por sitio en `data/raw_pages/index_<site>.json` mapea URL → rutas, tamaños y timestamp.
-- Escritura: solo en el scraping inicial y en cualquier re-scrape explícito; siempre sobrescribe la entrada previa para esa URL.
+- Escritura: solo en el scraping inicial y en cualquier re-scrape explícito; siempre sobrescribe la entrada previa para esa URL. Estrategias deterministas (ej. CentroEstudios) escriben siempre el HTML/MD completo del concurso único.
 - Lectura prioritaria: procesos de reparación/predicciones consultan primero el cache; solo si falta (o se decide rescrapear) se vuelve a scrapear y se sobreescribe.
 - Clave de deduplicación: combinación sitio + URL, manteniendo la lógica multi-sitio intacta.
 
@@ -1226,6 +1230,27 @@ Orden:
 
 ## Cambios Recientes
 
+### v4.4 - Estrategia CentroEstudios y predicción habilitada (2025-12-17)
+
+- Estrategia específica `centro_estudios_strategy.py`: sin paginación, sin LLM, timeout corto y JS trivial; extracción determinista del bloque “Convocatoria actual (FONIDE NN)” con nombre adaptable (FONIDE 16/17/…), fecha de consultas (apertura) y fecha de postulaciones (cierre).
+- Scraper salta waits pesados cuando la estrategia es CentroEstudios (evita demoras >1 min).
+- Predicciones: UI permite concursos cerrados sin `previous_concursos` cuando el dominio está habilitado (CentroEstudios) para permitir predicción anual determinista.
+- Cache e historial guardan siempre HTML/MD completos del concurso único de CentroEstudios.
+
+### v4.3 - Resiliencia ante concurrencia scraping/predicción (2025-12-16)
+
+- **Locks por sitio/operación**: `utils/lock_manager.py` con lockfiles en `data/locks`.
+- **Scraping**: `ExtractionService.extract_from_urls` adquiere lock `scrape` por sitio; limpia locks obsoletos y evita ejecuciones simultáneas.
+- **Predicciones**: `PredictionService.generate_predictions` detecta lock `scrape` activo y devuelve mensaje de espera en lugar de fallar.
+- **Objetivo**: Evitar crashes cuando se lanzan predicciones mientras hay scraping en curso.
+
+### v4.2 - Predicciones sin campo de confianza (2025-12-16)
+
+- **Eliminado**: Campo y lógica de `confianza` en predicciones.
+- **Simplificado**: Prompts y modelos (`PrediccionConcurso`, batches) sin confianza.
+- **Servicios**: `prediction_service` ya no calcula ni solicita confianza a LLM; solo valida fechas y justificaciones.
+- **Documentación**: ARQUITECTURA.md actualizado para reflejar flujo sin confianza.
+
 ### v4.1 - Cache completo de páginas individuales (2025-12-16)
 
 - Guardado de HTML/Markdown sin compresión para cada URL de concurso (`data/raw_pages/<site>/<slug>.html/.md`) con índice por sitio.
@@ -1259,20 +1284,6 @@ Orden:
 - **Separación total**: Código específico de ANID completamente aislado en módulos específicos
 - **Documentación completa**: Sección detallada "Cómo Agregar un Nuevo Sitio" en ARQUITECTURA.md
 - **Extensibilidad**: Agregar nuevo sitio ahora requiere solo crear nueva clase Strategy
-
-### v4.2 - Predicciones sin campo de confianza (2025-12-16)
-
-- **Eliminado**: Campo y lógica de `confianza` en predicciones.
-- **Simplificado**: Prompts y modelos (`PrediccionConcurso`, batches) sin confianza.
-- **Servicios**: `prediction_service` ya no calcula ni solicita confianza a LLM; solo valida fechas y justificaciones.
-- **Documentación**: ARQUITECTURA.md actualizado para reflejar flujo sin confianza.
-
-### v4.3 - Resiliencia ante concurrencia scraping/predicción (2025-12-16)
-
-- **Locks por sitio/operación**: `utils/lock_manager.py` con lockfiles en `data/locks`.
-- **Scraping**: `ExtractionService.extract_from_urls` adquiere lock `scrape` por sitio; limpia locks obsoletos y evita ejecuciones simultáneas.
-- **Predicciones**: `PredictionService.generate_predictions` detecta lock `scrape` activo y devuelve mensaje de espera en lugar de fallar.
-- **Objetivo**: Evitar crashes cuando se lanzan predicciones mientras hay scraping en curso.
 
 ### v3.5 - Reintento Automático con Aumento de Tokens y Mejoras en Extracción (2025-12-16)
 
@@ -1367,5 +1378,5 @@ Orden:
 
 ---
 
-**Última actualización**: 2025-12-16  
-**Versión de arquitectura**: 4.0
+**Última actualización**: 2025-12-17  
+**Versión de arquitectura**: 4.4

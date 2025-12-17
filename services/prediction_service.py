@@ -167,6 +167,7 @@ class PredictionService:
         # Filtrar solo concursos cerrados (solo estos pueden tener predicciones)
         closed_concursos = [c for c in filtered_concursos if c.get("estado") == "Cerrado"]
         logger.info(f"🔒 {len(closed_concursos)} concursos cerrados para analizar")
+        special_domains_allow_without_previous = {"centroestudios.mineduc.cl"}
         
         # Evitar predecir concursos que ya tienen predicción guardada
         existing_pred_urls: set[str] = set()
@@ -210,7 +211,15 @@ class PredictionService:
                 # Solo incluir si tiene versiones anteriores (lista no vacía)
                 if previous_concursos:
                     concursos_con_versiones_previas.append(concurso)
+                else:
+                    domain = urlparse(concurso_url).netloc.replace("www.", "")
+                    if domain in special_domains_allow_without_previous:
+                        concursos_con_versiones_previas.append(concurso)
             else:
+                domain = urlparse(concurso_url).netloc.replace("www.", "")
+                if domain in special_domains_allow_without_previous:
+                    concursos_con_versiones_previas.append(concurso)
+                    continue
                 logger.warning(
                     f"⚠️ Concurso '{concurso.get('nombre', 'N/A')}' ({concurso_url}) no encontrado en historial. "
                     f"Puede que no haya sido scrapeado aún."
@@ -284,8 +293,21 @@ class PredictionService:
                         continue
                     
                     previous_concursos = hist_concurso.get("previous_concursos", [])
+                    domain = urlparse(concurso_url).netloc.replace("www.", "")
+                    # Sitio especial: centroestudios.mineduc.cl (FONIDE anual)
+                    if domain == "centroestudios.mineduc.cl" and not previous_concursos:
+                        base_date_str = concurso.get("fecha_apertura") or concurso.get("fecha_cierre")
+                        if base_date_str:
+                            parsed = parse_date(base_date_str)
+                            prev_year = parsed.year if parsed else None
+                            previous_concursos = [{
+                                "nombre": concurso.get("nombre", ""),
+                                "fecha_apertura": base_date_str,
+                                "fecha_cierre": None,
+                                "año": prev_year,
+                            }]
+                    
                     if not previous_concursos:
-                        # Caso raro: marcar como no predecible
                         logger.debug(
                             f"ℹ️ Concurso '{concurso.get('nombre', 'N/A')}' no tiene versiones anteriores. "
                             f"Marcando como no predecible."
@@ -310,6 +332,44 @@ class PredictionService:
                         })
                         continue
                     
+                    # Para sitios especiales, aplicar predicción determinística anual y saltar LLM
+                    if domain == "centroestudios.mineduc.cl":
+                        pred_entry = self._predict_centro_estudios(concurso, previous_concursos)
+                        if pred_entry:
+                            predictions_to_save.append(pred_entry)
+                            debug_info["predictions"]["successful"] += 1
+                            debug_info["scraping"]["previous_concursos_extracted"][concurso_url] = {
+                                "count": len(previous_concursos),
+                                "concursos": previous_concursos,
+                                "source": "history_or_synthesized"
+                            }
+                            if status_callback:
+                                status_callback(
+                                    f"✅ Predicción (regla anual) para '{concurso.get('nombre', 'N/A')}': {pred_entry['fecha_predicha']}"
+                                )
+                            continue
+                        else:
+                            auto_justificacion = "No se pudo estimar fecha base para aplicar la regla anual de FONIDE."
+                            unpredictable_entry = {
+                                "concurso_nombre": concurso.get("nombre", ""),
+                                "concurso_url": concurso_url,
+                                "justificacion": auto_justificacion,
+                                "previous_concursos": previous_concursos,
+                                "reason": "missing_base_date",
+                                "marked_at": datetime.now().isoformat()
+                            }
+                            unpredictable_to_save.append(unpredictable_entry)
+                            debug_info["predictions"]["filtered"] += 1
+                            debug_info["predictions"]["filters"].append({
+                                "concurso_nombre": concurso.get("nombre"),
+                                "concurso_url": concurso_url,
+                                "filter_reason": "unpredictable",
+                                "reason": "missing_base_date",
+                                "justificacion": auto_justificacion,
+                                "source": "pre_batch_filtering"
+                            })
+                            continue
+
                     # Detectar si todos los previous_concursos son referencias a sí mismo
                     all_self_references = all(
                         prev.get("url", "").strip() == concurso_url.strip() 
@@ -907,6 +967,40 @@ class PredictionService:
             "predictions": predictions_to_save,
             "debug_info": debug_info,
             "stats": debug_info["stats"]
+        }
+
+    def _predict_centro_estudios(
+        self,
+        concurso: Dict[str, Any],
+        previous_concursos: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Predicción determinística para FONIDE (centroestudios.mineduc.cl):
+        asume anualidad y proyecta la misma fecha del año siguiente.
+        """
+        base_date_str = concurso.get("fecha_apertura") or concurso.get("fecha_cierre")
+        if not base_date_str and previous_concursos:
+            prev = previous_concursos[0]
+            base_date_str = prev.get("fecha_apertura") or prev.get("fecha_cierre")
+        base_date = parse_date(base_date_str) if base_date_str else None
+        if not base_date:
+            return None
+        target = base_date.replace(year=base_date.year + 1)
+        if target.date() <= datetime.now().date():
+            target = target.replace(year=target.year + 1)
+        fecha_predicha = target.strftime("%Y-%m-%d")
+        justificacion = (
+            "FONIDE es anual. Se proyecta la próxima convocatoria en la misma fecha del año siguiente, "
+            f"tomando como referencia la fecha conocida ({base_date.strftime('%Y-%m-%d')})."
+        )
+        return {
+            "concurso_nombre": concurso.get("nombre", ""),
+            "concurso_url": concurso.get("url", ""),
+            "fecha_predicha": fecha_predicha,
+            "justificacion": justificacion,
+            "predicted_at": datetime.now().isoformat(),
+            "source": "previous_concursos",
+            "previous_concursos": previous_concursos,
         }
     
     def _apply_filters(
