@@ -1,0 +1,10 @@
+crawl4ai>=0.7.4
+streamlit>=1.28.0
+google-generativeai>=0.3.0
+pydantic>=2.0.0
+python-dateutil>=2.8.2
+pandas>=2.0.0
+beautifulsoup4>=4.12.0
+html2text>=2024.2.26
+requests>=2.31.0
+
