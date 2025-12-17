@@ -21,6 +21,10 @@ SEED_URLS = {
     ],
     "DFI MINEDUC": [
         "https://dfi.mineduc.cl/",
+    ],
+    # Sitio sintético para concursos agregados manualmente (sin scraping)
+    "Manual": [
+        # Sin URLs semilla; se crean directamente desde la UI
     ]
 }
 
@@ -32,6 +36,7 @@ SITE_DOMAINS = {
     "cnachile.cl": "www.cnachile.cl",  # Normalizar
     "www.cnachile.cl": "CNA",
     "dfi.mineduc.cl": "DFI MINEDUC",
+    "manual.local": "Manual",
 }
 
 # Mapeo de nombres de sitio a nombres para historial
@@ -40,6 +45,7 @@ SITE_NAME_MAPPING = {
     "Centro Estudios MINEDUC": "centroestudios.mineduc.cl",
     "CNA": "cnachile.cl",
     "DFI MINEDUC": "dfi.mineduc.cl",
+    "Manual": "manual.local",
 }
 
 # Configuración específica por sitio
@@ -95,6 +101,16 @@ SITE_CONFIGS: Dict[str, Dict[str, Any]] = {
     "dfi.mineduc.cl": {
         "display_name": "DFI MINEDUC",
         "organismo": "MINEDUC",
+        "crawler_config": {},
+        "features": {
+            "dynamic_pagination": False,
+            "has_previous_concursos": False,
+        },
+        "known_subdirecciones": set()
+    },
+    "manual.local": {
+        "display_name": "Manual",
+        "organismo": "Ingreso manual",
         "crawler_config": {},
         "features": {
             "dynamic_pagination": False,

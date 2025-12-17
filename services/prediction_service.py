@@ -369,6 +369,7 @@ class PredictionService:
                                 "source": "pre_batch_filtering"
                             })
                             continue
+                    
 
                     # Detectar si todos los previous_concursos son referencias a sí mismo
                     all_self_references = all(
@@ -1002,6 +1003,7 @@ class PredictionService:
             "source": "previous_concursos",
             "previous_concursos": previous_concursos,
         }
+    
     
     def _apply_filters(
         self,

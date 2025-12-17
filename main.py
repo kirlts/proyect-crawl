@@ -5,6 +5,7 @@ Interfaz rediseñada: separa scraping de visualización de información
 """
 
 import streamlit as st
+import pandas as pd
 from urllib.parse import urlparse
 import logging
 from typing import List, Dict, Any, Optional
@@ -225,8 +226,95 @@ def test_gemini_connection(api_key: str, model_name: str) -> tuple[bool, str]:
 st.title("🔍 Buscador de Oportunidades de Financiamiento")
 st.caption("Repositorio de información sobre concursos de financiamiento para investigación académica en Chile")
 
-# Tabs principales: Explorar, Predicciones y Scraping
-tab1, tab2, tab3 = st.tabs(["📚 Explorar Concursos", "🔮 Predicciones", "⚙️ Scraping y Configuración"])
+# Tabs principales: Visualización, Explorar, Predicciones, Scraping y Manuales
+tab0, tab1, tab2, tab3, tab4 = st.tabs([
+    "👁️ Visualización",
+    "📚 Explorar Concursos",
+    "🔮 Predicciones",
+    "⚙️ Scraping y Configuración",
+    "📝 Concursos Manuales"
+])
+
+# ========== TAB 1: EXPLORAR CONCURSOS ==========
+# ========== TAB 0: VISUALIZACIÓN (solo lectura) ==========
+with tab0:
+    st.header("👁️ Visualización unificada")
+    st.caption("Lista de todos los concursos (todas las fuentes) con filtros, sin acciones destructivas.")
+    
+    # Cargar todos los concursos de todos los sitios
+    all_items = []
+    site_map = {
+        "ANID": "anid.cl",
+        "Centro Estudios MINEDUC": "centroestudios.mineduc.cl",
+        "CNA": "cnachile.cl",
+        "DFI MINEDUC": "dfi.mineduc.cl",
+        "Manual": "manual.local",
+    }
+    for display, site_name in site_map.items():
+        concursos_site = load_concursos_from_site(site_name)
+        for c in concursos_site:
+            c_copy = c.copy()
+            c_copy["fuente"] = display
+            all_items.append(c_copy)
+    
+    if not all_items:
+        st.info("No hay concursos cargados aún. Ejecuta scraping o agrega manuales.")
+    else:
+        # Preparar filtros
+        estados = sorted({c.get("estado", "") for c in all_items if c.get("estado")})
+        organismos = sorted({c.get("organismo", "") for c in all_items if c.get("organismo")})
+        subdirs = sorted({(c.get("subdireccion") or "").strip() for c in all_items if c.get("subdireccion")})
+        fuentes = sorted({c.get("fuente", "") for c in all_items if c.get("fuente")})
+        
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            filtro_estado = st.selectbox("Estado", options=["(todos)"] + estados, index=0, key="vis_estado")
+        with col_b:
+            filtro_org = st.selectbox("Organismo", options=["(todos)"] + organismos, index=0, key="vis_org")
+        with col_c:
+            filtro_fuente = st.selectbox("Fuente", options=["(todas)"] + fuentes, index=0, key="vis_fuente")
+        
+        col_d, col_e = st.columns(2)
+        with col_d:
+            filtro_subdir = st.selectbox("Subdirección", options=["(todas)"] + subdirs, index=0, key="vis_subdir")
+        with col_e:
+            filtro_texto = st.text_input("Buscar por nombre", key="vis_buscar")
+        
+        filtrados = all_items
+        if filtro_estado != "(todos)":
+            filtrados = [c for c in filtrados if c.get("estado") == filtro_estado]
+        if filtro_org != "(todos)":
+            filtrados = [c for c in filtrados if c.get("organismo") == filtro_org]
+        if filtro_fuente != "(todas)":
+            filtrados = [c for c in filtrados if c.get("fuente") == filtro_fuente]
+        if filtro_subdir != "(todas)":
+            filtrados = [c for c in filtrados if (c.get("subdireccion") or "").strip() == filtro_subdir]
+        if filtro_texto:
+            t = filtro_texto.lower().strip()
+            filtrados = [c for c in filtrados if t in (c.get("nombre", "").lower())]
+        
+        st.info(f"Mostrando {len(filtrados)} concursos filtrados (de {len(all_items)}).")
+        
+        table_data = []
+        for c in filtrados:
+            table_data.append({
+                "Nombre": c.get("nombre", ""),
+                "Estado": c.get("estado", ""),
+                "Organismo": c.get("organismo", ""),
+                "Subdirección": c.get("subdireccion", ""),
+                "Fuente": c.get("fuente", ""),
+                "Fecha Apertura": c.get("fecha_apertura", ""),
+                "Fecha Cierre": c.get("fecha_cierre", ""),
+                "URL": c.get("url", ""),
+            })
+        st.dataframe(
+            pd.DataFrame(table_data),
+            width='stretch',
+            hide_index=True,
+            column_config={
+                "URL": st.column_config.LinkColumn("URL")
+            },
+        )
 
 # ========== TAB 1: EXPLORAR CONCURSOS ==========
 with tab1:
@@ -532,25 +620,7 @@ with tab1:
                         },
                     )
                     
-                    # Botón de eliminación
-                    selected_concurso = st.selectbox(
-                        "Seleccionar concurso para eliminar:",
-                        options=[""] + [f"{idx + 1}. {c.get('nombre', '')}" for idx, c in enumerate(filtered_concursos)],
-                        key="select_concurso_delete",
-                        format_func=lambda x: "Seleccionar..." if x == "" else x
-                    )
-                    if st.button("🗑️ Eliminar seleccionado", disabled=not selected_concurso):
-                        if selected_concurso:
-                            idx = int(selected_concurso.split(".")[0]) - 1
-                            if 0 <= idx < len(filtered_concursos):
-                                concurso = filtered_concursos[idx]
-                                if st.session_state.history_manager.delete_concurso(site_name, concurso.get("url", "")):
-                                    # También eliminar predicciones relacionadas
-                                    delete_predictions_by_urls(site_name, [concurso.get("url", "")])
-                                    st.success("✅ Concurso eliminado")
-                                    st.rerun()
-                                else:
-                                    st.error("❌ Error al eliminar")
+                    st.info("Las acciones destructivas se realizan en la vista de administración.")
                 else:
                     st.info("No hay concursos que coincidan con los filtros.")
             else:
@@ -562,7 +632,7 @@ with tab2:
     st.caption("Genera predicciones de fechas de apertura para concursos cerrados basándose en 'Concursos anteriores'")
     
     # Selector de sitio
-    available_sites = list(SEED_URLS.keys())
+    available_sites = [s for s in SEED_URLS.keys() if s != "Manual"]
     selected_site = st.selectbox(
         "Seleccionar sitio:",
         options=available_sites,
@@ -1250,8 +1320,12 @@ with tab3:
             st.metric("Agotadas", status["exhausted_keys"])
         
         with st.expander("➕ Agregar API Keys"):
-            new_keys_input = st.text_area("Ingresa API keys (una por línea):", height=150)
-            if st.button("Agregar Keys"):
+            new_keys_input = st.text_area(
+                "Ingresa API keys (una por línea):",
+                height=150,
+                key="api_keys_input"
+            )
+            if st.button("Agregar Keys", key="add_api_keys_btn"):
                 if new_keys_input:
                     keys_list = [k.strip() for k in new_keys_input.split("\n") if k.strip()]
                     added = key_manager.add_keys(keys_list)
@@ -1279,7 +1353,8 @@ with tab3:
         selected_model_label = st.selectbox(
             "Modelo:",
             options=list(model_options.keys()),
-            index=list(model_options.values()).index(default_model) if default_model in model_options.values() else 0
+            index=list(model_options.values()).index(default_model) if default_model in model_options.values() else 0,
+            key="scraping_model_select"
         )
         selected_model = model_options[selected_model_label]
         
@@ -1290,9 +1365,15 @@ with tab3:
         
         # Opciones de scraping
         st.subheader("📑 Opciones de Scraping")
-        follow_pagination = st.checkbox("Seguir paginación", value=True)
-        max_pages = st.number_input("Máximo de páginas", min_value=1, max_value=100, value=2) if follow_pagination else 1
-        debug_mode = st.checkbox("Modo Debug", value=False)
+        follow_pagination = st.checkbox("Seguir paginación", value=True, key="scrape_follow_pagination")
+        max_pages = st.number_input(
+            "Máximo de páginas",
+            min_value=1,
+            max_value=100,
+            value=2,
+            key="scrape_max_pages"
+        ) if follow_pagination else 1
+        debug_mode = st.checkbox("Modo Debug", value=False, key="scrape_debug_mode")
     
     # Selección de sitio único para scraping
     st.subheader("🌐 Seleccionar Sitio para Scraping (uno a la vez)")
@@ -1300,7 +1381,8 @@ with tab3:
     selected_site_for_scraping = st.selectbox(
         "Sitio a procesar:",
         options=["(elige un sitio)"] + available_scrape_sites,
-        index=0
+        index=0,
+        key="scrape_site_selector"
     )
     
     # URLs personalizadas
@@ -1320,216 +1402,257 @@ with tab3:
     if urls_to_process:
         st.info(f"✅ {len(urls_to_process)} URL(s) a procesar")
     
-    # Botones de acción
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        process_button = st.button(
-            "🚀 Iniciar Scraping",
-            type="primary",
-            disabled=not urls_to_process or st.session_state.processing or status["total_keys"] == 0,
-            width='stretch'
-        )
-    with col2:
-        stop_button = st.button(
-            "⏹️ Detener",
-            disabled=not st.session_state.processing,
-            width='stretch'
-        )
+    # Botones de acción (solo scraping aquí)
+    run_scraping = st.button("🚀 Ejecutar Scraping", type="primary", key="run_scraping_btn")
     
-    if stop_button:
-        st.session_state.should_stop = True
-        st.warning("🛑 Deteniendo proceso...")
-    
-    # Procesamiento
-    if process_button and urls_to_process:
-        if status["total_keys"] == 0:
-            st.error("⚠️ Necesitas configurar al menos una API key en la sección 'Gestión de Múltiples API Keys'")
-            st.stop()
-        
-        st.session_state.processing = True
-        st.session_state.should_stop = False
-        
-        # Inicializar log de actualizaciones
-        if "status_log" not in st.session_state:
-            st.session_state.status_log = []
-        
-        # Contenedor para actualizaciones en tiempo real
-        st.subheader("📊 Actualizaciones en Tiempo Real")
-        
-        # Mostrar estado actual y progreso
-        status_placeholder = st.empty()
-        progress_placeholder = st.progress(0)
-        
-        def format_status_message(message: str) -> str:
-            """Formatea mensajes de estado en lenguaje natural"""
-            # Si ya tiene emoji, retornar tal cual
-            if any(emoji in message for emoji in ["✅", "❌", "⚠️", "🕷️", "🤖", "🔮", "💾", "🔄", "ℹ️", "📄", "⏱️", "🔍"]):
-                return message
-            
-            # Detectar tipo de mensaje y formatear
-            msg_lower = message.lower()
-            if "completado" in msg_lower or "exitoso" in msg_lower or "finalizado" in msg_lower:
-                return f"✅ {message}"
-            elif "advertencia" in msg_lower or "warning" in msg_lower:
-                return f"⚠️ {message}"
-            elif "error" in msg_lower or "fallo" in msg_lower or "failed" in msg_lower:
-                return f"❌ {message}"
-            elif "scraping" in msg_lower or "scrapeando" in msg_lower or "scrapear" in msg_lower or "página" in msg_lower:
-                return f"🕷️ {message}"
-            elif "llm" in msg_lower or "gemini" in msg_lower or "extracción" in msg_lower or "extrayendo" in msg_lower:
-                return f"🤖 {message}"
-            elif "predicción" in msg_lower or "prediccion" in msg_lower or "analizando similitudes" in msg_lower:
-                return f"🔮 {message}"
-            elif "guardando" in msg_lower or "guardado" in msg_lower or "historial" in msg_lower or "save" in msg_lower:
-                return f"💾 {message}"
-            elif "procesando" in msg_lower or "cargando" in msg_lower or "iniciando" in msg_lower:
-                return f"🔄 {message}"
-            elif "timeout" in msg_lower or "tiempo" in msg_lower:
-                return f"⏱️ {message}"
-            else:
-                return f"ℹ️ {message}"
-        
-        def update_ui():
-            """Actualiza la UI con los últimos mensajes"""
-            if st.session_state.status_log:
-                # Estado actual (último mensaje)
-                last_message = st.session_state.status_log[-1].get("message", "")
-                status_placeholder.info(f"**Estado actual:** {last_message}")
-        
-        def progress_callback(progress: float):
-            """Callback de progreso"""
-            progress_placeholder.progress(min(progress, 1.0))
-        
-        def status_callback(message: str):
-            """Callback que guarda mensajes en session_state y actualiza UI"""
-            formatted = format_status_message(message)
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            
-            # Agregar al log
-            st.session_state.status_log.append({
-                "timestamp": timestamp,
-                "message": formatted
-            })
-            
-            # Log también en consola para debugging
-            logger.info(f"[{timestamp}] {formatted}")
-            
-            # Actualizar UI inmediatamente (solo para mensajes críticos)
-            # Para no sobrecargar, solo actualizamos en mensajes importantes
-            if any(keyword in message.lower() for keyword in ["error", "completado", "iniciando", "timeout", "fallo"]):
+    if run_scraping:
+        if not selected_site_for_scraping or selected_site_for_scraping == "(elige un sitio)":
+            st.error("❌ Debes seleccionar un sitio para ejecutar el scraping.")
+        elif not urls_to_process:
+            st.error("❌ Debes especificar al menos una URL para procesar.")
+        else:
+            with st.spinner("Ejecutando scraping..."):
                 try:
-                    update_ui()
+                    result = extraction_service.extract_from_urls(
+                        urls=urls_to_process,
+                        follow_pagination=follow_pagination,
+                        max_pages=max_pages,
+                        debug_mode=debug_mode
+                    )
+                    st.success("✅ Scraping completado")
+                    st.json(result.get("summary", {}))
+                except RuntimeError as e:
+                    st.warning(str(e))
                 except Exception as e:
-                    # Si falla la actualización, solo loguear, no romper el flujo
-                    logger.warning(f"Error al actualizar UI: {e}")
+                    st.error(f"❌ Error durante el scraping: {e}")
+                    logger.error(f"Error durante el scraping: {e}", exc_info=True)
+    
+    
+# ========== TAB 4: CONCURSOS MANUALES ==========
+with tab4:
+    st.header("📝 Concursos Manuales")
+    st.caption("Agrega concursos que no provienen de un sitio y visualiza sus predicciones deterministas (anual +1 año)")
+    
+    # Estado inicial de los campos manuales
+    if "manual_nombre" not in st.session_state:
+        st.session_state.manual_nombre = ""
+    if "manual_organismo" not in st.session_state:
+        st.session_state.manual_organismo = "Ingreso manual"
+    if "manual_fecha_apertura" not in st.session_state:
+        st.session_state.manual_fecha_apertura = ""
+    if "manual_fecha_cierre" not in st.session_state:
+        st.session_state.manual_fecha_cierre = ""
+    if "manual_descripcion" not in st.session_state:
+        st.session_state.manual_descripcion = ""
+    if "manual_subdireccion" not in st.session_state:
+        st.session_state.manual_subdireccion = ""
+    
+    # Ejemplo real (FONIDE 16)
+    ejemplo_manual = {
+        "nombre": "FONIDE 16 - Fondo de Investigación y Desarrollo en Educación 2025",
+        "organismo": "MINEDUC",
+        "fecha_apertura": "2025-05-15",
+        "fecha_cierre": "2025-06-26",
+        "descripcion": "Convocatoria anual FONIDE para investigación educativa.",
+        "subdireccion": "Educación"
+    }
+    
+    history_manual = st.session_state.history_manager.load_history("manual.local")
+    concursos_manual = history_manual.get("concursos", [])
+    predictions_manual = load_predictions("manual.local")
+    pred_index = {p.get("concurso_url"): p for p in predictions_manual}
+    
+    st.subheader("Listado")
+    if not concursos_manual:
+        st.info("No hay concursos manuales aún.")
+    else:
+        table = []
+        for c in concursos_manual:
+            versions = c.get("versions", [])
+            latest = versions[-1] if versions else {}
+            url = c.get("url", "")
+            pred = pred_index.get(url)
+            table.append({
+                "Nombre": c.get("nombre", ""),
+                "Organismo": c.get("organismo", ""),
+                "Fecha Apertura": latest.get("fecha_apertura") or c.get("fecha_apertura") or "",
+                "Fecha Cierre": latest.get("fecha_cierre") or c.get("fecha_cierre") or "",
+                "Estado": latest.get("estado") or c.get("estado") or "",
+                "Predicción (+1 año)": pred.get("fecha_predicha", "") if pred else "",
+                "URL": url,
+            })
+        st.dataframe(
+            pd.DataFrame(table),
+            width='stretch',
+            hide_index=True,
+            column_config={
+                "URL": st.column_config.LinkColumn("URL")
+            },
+        )
         
-        def should_stop_callback() -> bool:
-            """Verifica si el proceso debe detenerse"""
-            return st.session_state.get("should_stop", False)
+        # Eliminación individual
+        nombres_lista = [f"{idx + 1}. {c.get('nombre', 'Sin nombre')}" for idx, c in enumerate(concursos_manual)]
+        selected_delete = st.selectbox(
+            "Selecciona un concurso manual para eliminar:",
+            options=["(ninguno)"] + nombres_lista,
+            key="manual_delete_selector"
+        )
+        if st.button("🗑️ Eliminar concurso manual seleccionado", disabled=selected_delete == "(ninguno)", key="delete_manual_single_btn"):
+            idx = None
+            if selected_delete != "(ninguno)":
+                try:
+                    idx = int(selected_delete.split(".")[0]) - 1
+                except Exception:
+                    idx = None
+            if idx is not None and 0 <= idx < len(concursos_manual):
+                url_to_delete = concursos_manual[idx].get("url")
+                if url_to_delete:
+                    st.session_state.history_manager.delete_concurso("manual.local", url_to_delete)
+                    try:
+                        from utils.file_manager import delete_predictions_by_urls
+                        delete_predictions_by_urls("manual.local", [url_to_delete])
+                    except Exception:
+                        pass
+                    if hasattr(st.session_state.history_manager, "_cache"):
+                        st.session_state.history_manager._cache.clear()
+                    st.success("✅ Concurso manual eliminado.")
+                    st.rerun()
+                else:
+                    st.error("❌ No se encontró la URL del concurso a eliminar.")
         
-        # Mostrar UI inicial
-        update_ui()
+        # Eliminación total
+        st.markdown("---")
+        st.subheader("🗑️ Eliminar todos los concursos manuales")
+        confirm_clear_manual = st.checkbox(
+            "Confirmo que deseo eliminar TODOS los concursos manuales y sus predicciones",
+            key="confirm_clear_manual_history"
+        )
+        if st.button("🗑️ Limpiar concursos manuales", disabled=not confirm_clear_manual, type="primary", key="clear_manual_history_btn"):
+            try:
+                st.session_state.history_manager.clear_history("manual.local")
+                try:
+                    from utils.file_manager import clear_predictions
+                    clear_predictions("manual.local")
+                except Exception:
+                    pass
+                if hasattr(st.session_state.history_manager, "_cache"):
+                    st.session_state.history_manager._cache.clear()
+                st.success("✅ Concursos manuales y predicciones eliminados.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error al limpiar concursos manuales: {e}")
+    
+    st.subheader("Agregar concurso manual")
+    
+    # Botón de ejemplo fuera del form para evitar conflictos de estado
+    if st.button("Rellenar con datos de ejemplo (FONIDE 16)"):
+        st.session_state.manual_nombre = ejemplo_manual["nombre"]
+        st.session_state.manual_organismo = ejemplo_manual["organismo"]
+        st.session_state.manual_fecha_apertura = ejemplo_manual["fecha_apertura"]
+        st.session_state.manual_fecha_cierre = ejemplo_manual["fecha_cierre"]
+        st.session_state.manual_descripcion = ejemplo_manual["descripcion"]
+        st.session_state.manual_subdireccion = ejemplo_manual["subdireccion"]
+        st.info("Campos rellenados con datos de ejemplo.")
+        st.rerun()
+    
+    with st.form("add_manual_concurso_form"):
+        manual_nombre = st.text_input("Nombre del concurso", key="manual_nombre")
+        manual_organismo = st.text_input("Organismo", key="manual_organismo")
+        manual_fecha_apertura = st.text_input("Fecha de apertura (YYYY-MM-DD)", key="manual_fecha_apertura")
+        manual_fecha_cierre = st.text_input("Fecha de cierre (YYYY-MM-DD)", key="manual_fecha_cierre")
+        manual_descripcion = st.text_area("Descripción (opcional)", key="manual_descripcion")
+        manual_subdireccion = st.text_input("Subdirección/área (opcional)", key="manual_subdireccion")
+        
+        submitted_manual = st.form_submit_button("Guardar concurso manual", type="primary")
+    
+    if submitted_manual:
+        from datetime import datetime, date
+        import re
+        from models import Concurso as ConcursoModel
+        from utils.file_manager import save_predictions
+        from utils.date_parser import parse_date
+        
+        def _slugify(text: str) -> str:
+            slug = re.sub(r"[^a-zA-Z0-9\\-]+", "-", text.strip().lower()).strip("-")
+            return slug or "concurso-manual"
+        
+        def _parse_iso_required(label: str, value: str) -> date:
+            try:
+                parsed = datetime.fromisoformat(value).date()
+                return parsed
+            except Exception:
+                raise ValueError(f"{label} debe tener formato YYYY-MM-DD")
         
         try:
-            extraction_service = ExtractionService(
-                api_key_manager=key_manager,
-                model_name=selected_model
+            if not manual_nombre.strip():
+                raise ValueError("El nombre es obligatorio")
+            if not manual_fecha_apertura.strip():
+                raise ValueError("La fecha de apertura es obligatoria")
+            if not manual_fecha_cierre.strip():
+                raise ValueError("La fecha de cierre es obligatoria")
+            
+            fa_dt = _parse_iso_required("Fecha de apertura", manual_fecha_apertura.strip())
+            fc_dt = _parse_iso_required("Fecha de cierre", manual_fecha_cierre.strip())
+            if fc_dt <= fa_dt:
+                raise ValueError("La fecha de cierre debe ser posterior a la fecha de apertura")
+            
+            slug = _slugify(manual_nombre or "concurso-manual")
+            manual_url = f"https://manual.local/agregado-manualmente/{slug}"
+            
+            today = date.today()
+            if fc_dt < today:
+                estado = "Cerrado"
+            elif fa_dt > today:
+                estado = "Próximo"
+            else:
+                estado = "Abierto"
+            
+            concurso_manual = ConcursoModel(
+                nombre=manual_nombre,
+                fecha_apertura=fa_dt.isoformat(),
+                fecha_cierre=fc_dt.isoformat(),
+                organismo=manual_organismo or "Ingreso manual",
+                financiamiento=None,
+                url=manual_url,
+                estado=estado,
+                descripcion=manual_descripcion or None,
+                subdireccion=manual_subdireccion or None,
+                extraido_en=datetime.now().isoformat(),
+                fuente="manual.local",
             )
             
-            # Mensaje inicial
-            status_callback("Iniciando proceso de extracción...")
-            update_ui()
-            
-            # Extraer
-            concursos = extraction_service.extract_from_urls(
-                urls=urls_to_process,
-                follow_pagination=follow_pagination,
-                max_pages=max_pages,
-                progress_callback=progress_callback,
-                status_callback=status_callback,
-                should_stop_callback=should_stop_callback
+            history_updated = st.session_state.history_manager.update_history(
+                site="manual.local",
+                concursos=[concurso_manual],
+                enriched_content={
+                    manual_url: {
+                        "markdown": manual_descripcion or "",
+                        "html": manual_descripcion or "",
+                    }
+                }
             )
-            
-            status_callback(f"✅ Extracción completada: {len(concursos)} concursos encontrados")
-            
-            # Convertir a dict para guardar
-            concursos_dict = [c.model_dump() if hasattr(c, 'model_dump') else c for c in concursos]
-            
-            # Guardar por sitio
-            status_callback("💾 Guardando resultados...")
-            for site_name in set([c.get("fuente") or "unknown" for c in concursos_dict]):
-                site_concursos = [c for c in concursos_dict if (c.get("fuente") or "unknown") == site_name]
-                if site_concursos:
-                    filepath = save_results(site_concursos, f"concursos_{site_name.replace('.', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-                    status_callback(f"💾 Guardados {len(site_concursos)} concursos para {site_name}")
-            
-            status_callback(f"✅ Procesamiento completado exitosamente")
-            
-            # Actualizar UI final
-            update_ui()
-            
-            st.success(f"✅ Procesamiento completado: {len(concursos)} concursos extraídos")
-            st.info("💡 Ve a la pestaña 'Explorar Concursos' para ver los resultados")
-            
-            # Limpiar cache del historial y marcar que se completó un scraping
-            if hasattr(st.session_state.history_manager, '_cache'):
+            st.session_state.history_manager.save_history("manual.local", history_updated)
+            if hasattr(st.session_state.history_manager, "_cache"):
                 st.session_state.history_manager._cache.clear()
-            st.session_state.last_scraping_completed = datetime.now().isoformat()
             
-            # Forzar actualización automática de la tab de exploración
+            # Predicción determinista (apertura + 1 año)
+            base_date = parse_date(fa_dt.isoformat())
+            if base_date is None:
+                raise ValueError("No se pudo interpretar la fecha de apertura para la predicción")
+            target = base_date.replace(year=base_date.year + 1)
+            pred_entry = {
+                "concurso_nombre": manual_nombre,
+                "concurso_url": manual_url,
+                "fecha_predicha": target.strftime("%Y-%m-%d"),
+                "justificacion": "Concurso agregado manualmente; se asume recurrencia anual en la fecha de apertura.",
+                "predicted_at": datetime.now().isoformat(),
+                "source": "manual_rule",
+                "previous_concursos": [],
+            }
+            save_predictions("manual.local", [pred_entry])
+            
+            st.success(f"✅ Concurso manual guardado y predicción asignada ({pred_entry['fecha_predicha']})")
             st.rerun()
-            
-        except RuntimeError as e:
-            # Errores como lock concurrente
-            error_msg = str(e)
-            status_callback(f"⚠️ {error_msg}")
-            try:
-                update_ui()
-            except Exception as ui_error:
-                logger.warning(f"Error al actualizar UI: {ui_error}")
-            st.warning(f"⚠️ {error_msg}")
         except Exception as e:
-            # Capturar información completa del error
-            import traceback
-            error_traceback = traceback.format_exc()
-            error_type = type(e).__name__
-            error_msg = f"Error durante el procesamiento: {str(e)}"
-            
-            # Agregar al log de estado
-            status_callback(f"❌ {error_msg}")
-            status_callback(f"❌ Tipo de error: {error_type}")
-            
-            # Actualizar UI con error
-            try:
-                update_ui()
-            except Exception as ui_error:
-                logger.warning(f"Error al actualizar UI: {ui_error}")
-            
-            # Mostrar error en UI
-            st.error(f"❌ **Error durante el procesamiento**")
-            st.error(f"**Tipo:** `{error_type}`")
-            st.error(f"**Mensaje:** {str(e)}")
-            
-            # Log detallado en consola
-            logger.error(f"Error en procesamiento: {e}", exc_info=True)
-            logger.error(f"Traceback completo:\n{error_traceback}")
-            
-            # Mostrar detalles del error en un expander
-            with st.expander("🔍 Detalles Técnicos del Error", expanded=True):
-                st.code(error_traceback, language="python")
-            
-            # Mostrar últimos mensajes del log para contexto
-            if "status_log" in st.session_state and st.session_state.status_log:
-                with st.expander("📋 Contexto: Últimas actividades antes del error", expanded=False):
-                    recent_logs = st.session_state.status_log[-10:]
-                    for log_entry in recent_logs:
-                        timestamp = log_entry.get("timestamp", "")
-                        message = log_entry.get("message", "")
-                        st.text(f"[{timestamp}] {message}")
-        finally:
-            st.session_state.processing = False
-            st.session_state.should_stop = False
-            # Mostrar UI final con todos los mensajes acumulados
-            if "status_log" in st.session_state and st.session_state.status_log:
-                update_ui()
-
+            st.error(f"❌ Error al guardar concurso manual: {e}")
+            logger.error(f"Error al guardar concurso manual: {e}", exc_info=True)

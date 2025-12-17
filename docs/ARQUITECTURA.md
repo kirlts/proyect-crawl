@@ -720,6 +720,7 @@ items: List[PrediccionConcursoBatchItem]  # Lista de predicciones
        │   └─→ Extracción mejorada de años (desde nombre, fechas o URL)
        ├─→ update_history() con enriched_content
        └─→ Guardar debug (save_debug_info_scraping)
+       └─→ **Reparación automática post-scrape**: si el historial queda con concursos incompletos, se ejecuta `repair_incomplete_concursos` sobre esas URLs usando cache HTML/MD (sin re-scrapear si no es necesario), marcando suspendidos por patrón y completando nombre/fechas con LLM solo donde falte.
 ```
 
 ### Flujo de Predicción Masiva (con Batching y Reintentos)
@@ -1228,7 +1229,47 @@ Orden:
 
 ---
 
+## Preparación para Despliegue en AWS (modo práctica)
+
+- Objetivo: despliegue rápido en EC2 con Docker y tareas programadas simples (cron) para ANID.
+- Separación de vistas (recomendado):
+  - **Vista Pública/Visualización**: lista unificada de todos los concursos (todas las fuentes), con filtros avanzados (estado, organismo, subdirección, búsqueda, fecha de apertura/cierre, fuente, “incompletos”), sin acciones destructivas.
+  - **Vista Administración**: ejecutar scraping manual, ejecutar predicciones manuales, limpiar historiales/predicciones, agregar concursos manuales. Acceso único (sin hardening estricto para este caso de práctica).
+- Automatizaciones mínimas:
+  - Cron diario en EC2: script `scripts/run_daily_anid.sh` (usa `scripts/daily_anid.py`) que hace scrape ANID (máx 2 páginas) y luego predicciones ANID.
+  - Se encapsula en un único script diario (scrape→repair implícito→predict).
+- Dockerización básica:
+  - `Dockerfile` multietapa simple (builder + runtime slim), instala dependencias y expone `streamlit run main.py --server.port 8501 --server.address 0.0.0.0`.
+  - `docker-compose.yml` (opcional) para desarrollo local (servicio app + volumen `data/` persistente).
+  - Variables mínimas por entorno: `API_KEYS_PATH`, `DATA_DIR` (montada en volumen), `PORT`.
+- Despliegue en EC2 (mínimo):
+  - Instalar Docker + docker-compose.
+  - Copiar `.env` (claves Gemini), montar `data/` en volumen persistente.
+  - Abrir puerto 8501 o mapear a 80/443 detrás de un ALB/Nginx (opcional).
+- Consideraciones de estabilidad:
+  - Locks por sitio ya existen; validar limpieza de locks en cron (stale 5 min).
+  - Backups simples: snapshot periódico de `data/` (history, predictions, raw_pages, debug).
+  - Monitoreo ligero: logs stdout de Docker + rotación (log-driver json-file con `max-size`/`max-file`).
+- Pendientes para futura producción (no crítico para la práctica):
+  - Autenticación básica en vista de administración.
+  - HTTPS (ALB o Nginx con cert).
+  - Healthcheck simple (`streamlit` no expone; añadir endpoint lightweight en el futuro).
+  - Métricas (Prometheus/OpenTelemetry) opcional.
+
 ## Cambios Recientes
+
+### v4.6 - Preparación AWS y separación de vistas (2025-12-17)
+
+- Añadida sección de despliegue básico en AWS (EC2 + Docker + cron diario ANID con predicción automática).
+- Recomendación de separar vistas: una de visualización (solo lectura, todos los concursos con filtros) y otra de administración (scraping, predicciones manuales, limpieza, alta manual).
+- Notas operativas mínimas: cron diario, backup de `data/`, uso de locks existentes, logging sencillo.
+
+### v4.5 - Concursos Manuales en pestaña dedicada (2025-12-17)
+
+- Nueva pestaña de UI “📝 Concursos Manuales”: lista todos los concursos guardados en `manual.local` y sus predicciones deterministas.
+- Formulario con validación estricta (YYYY-MM-DD) y regla de negocio: la fecha de cierre debe ser posterior a la de apertura; no se restringe pasado/futuro.
+- Cada alta manual guarda en historial `manual.local`, cachea el contenido (markdown/html básico del formulario) y asigna predicción automática (+1 año desde la fecha de apertura), sin usar el flujo de predicciones ni el LLM.
+- El flujo general de predicciones excluye los concursos manuales; su predicción se genera al momento de crearlos.
 
 ### v4.4 - Estrategia CentroEstudios y predicción habilitada (2025-12-17)
 
@@ -1238,6 +1279,7 @@ Orden:
 - Cache e historial guardan siempre HTML/MD completos del concurso único de CentroEstudios.
 - UI de scraping ahora forza **un solo sitio por corrida** y el servicio filtra URLs de dominios distintos para evitar mezclas.
 - Locks de scraping: se consideran obsoletos a los 5 minutos (`stale_seconds=300`) para limpiar locks viejos automáticamente.
+- **Reparación automática post-scrape**: tras cada extracción, si quedan concursos incompletos en el historial, se ejecuta `repair_incomplete_concursos` sobre esas URLs, usando cache HTML/MD y evitando re-scrapear cuando es posible.
 
 ### v4.3 - Resiliencia ante concurrencia scraping/predicción (2025-12-16)
 

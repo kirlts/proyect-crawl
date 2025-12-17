@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    container_name: proyect-crawl
+    ports:
+      - "${PORT:-8501}:8501"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+

@@ -31,6 +31,10 @@ data/
 *.json
 *.csv
 
+# API Keys y entorno
+.env
+data/.api_keys.json
+
 # API Keys
 .env
 *.key
