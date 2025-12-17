@@ -10,9 +10,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl git \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar dependencias
+# Instalar dependencias de Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Instalar navegadores de Playwright y sus dependencias del sistema
+# (crawl4ai usa playwright, así que necesitamos instalar los navegadores)
+RUN python -m playwright install-deps chromium && \
+    python -m playwright install chromium
 
 # Copiar código
 COPY . .

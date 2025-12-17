@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
-# Ruta base del proyecto
-BASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Script para ejecutar scraping diario de ANID dentro del contenedor Docker
+# Este script debe ejecutarse dentro del contenedor: docker exec proyect-crawl /app/scripts/run_daily_anid.sh
+
+# Ruta base del proyecto (dentro del contenedor)
+BASE_DIR="/app"
 cd "$BASE_DIR"
 
 # Crear directorio de logs si no existe
