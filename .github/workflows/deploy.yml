@@ -55,14 +55,17 @@ jobs:
           script: |
             set -e
             cd /home/ubuntu/proyect-crawl
-            # Limpiar imágenes Docker antiguas para liberar espacio
-            docker system prune -af --volumes || true
+            # Detener y eliminar contenedor actual primero para liberar espacio
+            docker rm -f proyect-crawl || true
+            # Eliminar imágenes huérfanas (no usadas) pero NO volúmenes (necesitamos data)
+            docker image prune -af || true
             # Login a ECR
             aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $REGISTRY
+            # Eliminar imagen antigua del mismo repositorio si existe
+            docker rmi $REGISTRY/$REPOSITORY:latest || true
             # Pull última imagen
             docker pull $REGISTRY/$REPOSITORY:latest
             # Reiniciar contenedor
-            docker rm -f proyect-crawl || true
             docker run -d --name proyect-crawl \
               -p 8501:8501 \
               -v $(pwd)/data:/app/data \
