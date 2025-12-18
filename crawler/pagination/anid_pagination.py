@@ -157,6 +157,12 @@ class AnidPagination:
         last_page_detected = False
         
         for page_num in range(2, max_pages + 1):
+            # Verificar cancelación antes de procesar cada página
+            from utils.scraping_state import get_should_stop
+            if get_should_stop():
+                logger.info(f"⚠️ Cancelación detectada. Deteniendo paginación en página {page_num}")
+                break
+            
             if last_page_detected:
                 logger.info(f"⏹️ Última página ya detectada. Deteniendo paginación.")
                 break

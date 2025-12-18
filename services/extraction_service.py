@@ -262,10 +262,14 @@ class ExtractionService:
                 if status_callback:
                     status_callback(f"Scrapeando {i+1}/{total_urls}: {url}")
                 
-                page_results = self._scrape_url(url, follow_pagination, max_pages)
+                page_results = self._scrape_url(url, follow_pagination, max_pages, should_stop_callback)
                 
                 # Limpiar y preparar markdown de todas las páginas
                 for page_result in page_results:
+                    # Verificar cancelación antes de procesar cada página
+                    if should_stop_callback and should_stop_callback():
+                        logger.info("Proceso detenido durante procesamiento de páginas")
+                        break
                     if not page_result.get("success") or not page_result.get("markdown"):
                         debug_info["scraping"]["pages_failed"] += 1
                         debug_info["warnings"].append({
@@ -307,6 +311,11 @@ class ExtractionService:
                 if progress_callback:
                     progress_callback((i + 1) / total_urls)
                     
+            except asyncio.CancelledError:
+                logger.info("Scraping cancelado por el usuario")
+                if status_callback:
+                    status_callback("⚠️ Scraping cancelado")
+                break
             except Exception as e:
                 error_msg = str(e)
                 debug_info["scraping"]["errors"].append({
@@ -2057,7 +2066,8 @@ class ExtractionService:
         self,
         url: str,
         follow_pagination: bool,
-        max_pages: int
+        max_pages: int,
+        should_stop_callback: Optional[callable] = None
     ) -> List[Dict[str, Any]]:
         """
         Scrapea una URL, manejando paginación dinámica o tradicional.

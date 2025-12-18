@@ -260,7 +260,15 @@ class WebScraper:
                         attempt = 0
                         last_state = None
                         
+                        # Importar función de verificación de cancelación
+                        from utils.scraping_state import get_should_stop
+                        
                         while attempt < max_attempts:
+                            # Verificar cancelación en cada iteración (cada 500ms)
+                            if get_should_stop():
+                                logger.info("⚠️ Cancelación detectada durante espera de contenido")
+                                raise asyncio.CancelledError("Scraping cancelado por el usuario")
+                            
                             state = await page.evaluate(check_content_ready)
                             
                             if state['ready']:
@@ -269,6 +277,11 @@ class WebScraper:
                             
                             # Si el estado no cambió después de varios intentos, puede que esté cargando
                             if last_state and last_state == state:
+                                # Verificar cancelación antes de operaciones costosas
+                                if get_should_stop():
+                                    logger.info("⚠️ Cancelación detectada durante scroll")
+                                    raise asyncio.CancelledError("Scraping cancelado por el usuario")
+                                
                                 # Esperar un poco más y hacer scroll para activar lazy loading
                                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
                                 await page.wait_for_timeout(500)
@@ -419,6 +432,14 @@ class WebScraper:
                         "error": error_msg
                     }
                     
+        except asyncio.CancelledError:
+            logger.info(f"Scraping cancelado para {url}")
+            return {
+                "success": False,
+                "markdown": "",
+                "url": url,
+                "error": "Scraping cancelado por el usuario"
+            }
         except asyncio.TimeoutError:
             error_msg = f"Timeout al scrapear {url}"
             logger.error(error_msg)
@@ -623,7 +644,15 @@ class WebScraper:
                         attempt = 0
                         last_state = None
                         
+                        # Importar función de verificación de cancelación
+                        from utils.scraping_state import get_should_stop
+                        
                         while attempt < max_attempts:
+                            # Verificar cancelación en cada iteración (cada 500ms)
+                            if get_should_stop():
+                                logger.info("⚠️ Cancelación detectada durante espera de contenido")
+                                raise asyncio.CancelledError("Scraping cancelado por el usuario")
+                            
                             state = await page.evaluate(check_content_ready)
                             
                             if state['ready']:
@@ -632,6 +661,11 @@ class WebScraper:
                             
                             # Si el estado no cambió después de varios intentos, puede que esté cargando
                             if last_state and last_state == state:
+                                # Verificar cancelación antes de operaciones costosas
+                                if get_should_stop():
+                                    logger.info("⚠️ Cancelación detectada durante scroll")
+                                    raise asyncio.CancelledError("Scraping cancelado por el usuario")
+                                
                                 # Esperar un poco más y hacer scroll para activar lazy loading
                                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
                                 await page.wait_for_timeout(500)
@@ -782,6 +816,14 @@ class WebScraper:
                         "error": error_msg
                     }
                     
+        except asyncio.CancelledError:
+            logger.info(f"Scraping cancelado para {url}")
+            return {
+                "success": False,
+                "markdown": "",
+                "url": url,
+                "error": "Scraping cancelado por el usuario"
+            }
         except asyncio.TimeoutError:
             error_msg = f"Timeout al scrapear {url}"
             logger.error(error_msg)
@@ -871,6 +913,14 @@ class WebScraper:
                         "error": error_msg
                     }
                     
+        except asyncio.CancelledError:
+            logger.info(f"Scraping cancelado para {url}")
+            return {
+                "success": False,
+                "markdown": "",
+                "url": url,
+                "error": "Scraping cancelado por el usuario"
+            }
         except asyncio.TimeoutError:
             error_msg = f"Timeout al scrapear {url}"
             logger.error(error_msg)

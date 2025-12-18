@@ -46,6 +46,14 @@ from utils import (
     clear_unpredictable_concursos,
     HistoryManager
 )
+from utils.scraping_state import (
+    save_scraping_state,
+    load_scraping_state,
+    clear_scraping_state,
+    set_should_stop,
+    get_should_stop,
+    is_scraping_in_progress
+)
 from config import PROCESSED_DIR, PREDICTIONS_DIR
 
 # Configurar página
@@ -60,8 +68,37 @@ if "concursos" not in st.session_state:
     st.session_state.concursos = {}
 if "processing" not in st.session_state:
     st.session_state.processing = False
+
+# Limpiar estado persistente al iniciar el sistema, PERO solo si es antiguo
+# Si el estado es muy reciente (< 5 minutos), probablemente hay un scraping en curso
+# y NO debemos limpiarlo
+import time
+persistent_state_check = load_scraping_state()
+if persistent_state_check:
+    timestamp = persistent_state_check.get("timestamp", 0)
+    # Si el estado es muy antiguo (> 5 minutos), limpiarlo
+    if time.time() - timestamp > 300:  # 5 minutos
+        clear_scraping_state()
+        persistent_state_check = None
+    else:
+        # Estado reciente: probablemente hay scraping en curso, sincronizar
+        st.session_state.scraping_in_progress = persistent_state_check.get("in_progress", False)
+        st.session_state.should_stop = persistent_state_check.get("should_stop", False)
+        st.session_state.current_scraping_site = persistent_state_check.get("site", "")
+else:
+    clear_scraping_state()  # No hay estado, asegurar limpieza
+
+# Inicializar estado de sesión
 if "should_stop" not in st.session_state:
     st.session_state.should_stop = False
+if "scraping_in_progress" not in st.session_state:
+    st.session_state.scraping_in_progress = False
+if "current_scraping_site" not in st.session_state:
+    st.session_state.current_scraping_site = ""
+
+# Nota: El estado persistente se creará nuevamente cuando se inicie un scraping
+# y se limpiará cuando termine o se cancele
+
 if "api_key_manager" not in st.session_state:
     st.session_state.api_key_manager = APIKeyManager()
 if "history_manager" not in st.session_state:
@@ -257,17 +294,73 @@ with tab0:
             c_copy["fuente"] = display
             all_items.append(c_copy)
     
+    # Cargar todas las predicciones de todos los sitios
+    predictions_map = {}  # URL -> predicción
+    all_predictions = []  # Lista de todas las predicciones con info del concurso
+    for display, site_name in site_map.items():
+        predictions = load_predictions(site_name)
+        for pred in predictions:
+            url = pred.get("concurso_url", "")
+            if url:
+                predictions_map[url] = pred
+                # Buscar el concurso correspondiente
+                concurso = next((c for c in all_items if c.get("url") == url), None)
+                if concurso:
+                    all_predictions.append({
+                        "prediccion": pred,
+                        "concurso": concurso
+                    })
+    
+    # Mostrar predicciones cercanas (dentro del próximo mes)
+    from datetime import datetime, timedelta
+    today = datetime.now().date()
+    next_month = today + timedelta(days=30)
+    
+    cercanas = []
+    for item in all_predictions:
+        fecha_predicha_str = item["prediccion"].get("fecha_predicha", "")
+        if fecha_predicha_str:
+            try:
+                fecha_predicha = datetime.strptime(fecha_predicha_str, "%Y-%m-%d").date()
+                if today <= fecha_predicha <= next_month:
+                    cercanas.append(item)
+            except (ValueError, TypeError):
+                pass
+    
+    if cercanas:
+        st.subheader("📅 Predicciones cercanas (próximo mes)")
+        st.caption(f"Predicciones que se contemplan para dentro del próximo mes ({len(cercanas)} encontradas)")
+        
+        # Ordenar por fecha predicha
+        cercanas.sort(key=lambda x: datetime.strptime(x["prediccion"].get("fecha_predicha", "9999-12-31"), "%Y-%m-%d").date())
+        
+        cercanas_data = []
+        for item in cercanas:
+            pred = item["prediccion"]
+            c = item["concurso"]
+            fecha_predicha = pred.get("fecha_predicha", "")
+            cercanas_data.append({
+                "Nombre": c.get("nombre", ""),
+                "Organismo": c.get("organismo", ""),
+                "Fecha Predicha": fecha_predicha,
+                "Estado Actual": c.get("estado", ""),
+                "Fuente": c.get("fuente", ""),
+                "URL": c.get("url", ""),
+            })
+        
+        st.dataframe(
+            pd.DataFrame(cercanas_data),
+            width='stretch',
+            hide_index=True,
+            column_config={
+                "URL": st.column_config.LinkColumn("URL")
+            },
+        )
+        st.divider()
+    
     if not all_items:
         st.info("No hay concursos cargados aún. Ejecuta scraping o agrega manuales.")
     else:
-        # Cargar todas las predicciones de todos los sitios
-        predictions_map = {}  # URL -> predicción
-        for display, site_name in site_map.items():
-            predictions = load_predictions(site_name)
-            for pred in predictions:
-                url = pred.get("concurso_url", "")
-                if url:
-                    predictions_map[url] = pred
         
         # Preparar filtros
         estados = sorted({c.get("estado", "") for c in all_items if c.get("estado")})
@@ -1427,8 +1520,60 @@ with tab3:
     if urls_to_process:
         st.info(f"✅ {len(urls_to_process)} URL(s) a procesar")
     
+    # Verificar estado persistente para determinar si hay scraping en progreso
+    persistent_scraping = is_scraping_in_progress()
+    scraping_active = st.session_state.scraping_in_progress or persistent_scraping
+    
+    # Obtener estado persistente para mostrar información
+    persistent_state = load_scraping_state()
+    site_info = ""
+    if persistent_state:
+        site_info = f" ({persistent_state.get('site', '')})"
+    elif st.session_state.current_scraping_site:
+        site_info = f" ({st.session_state.current_scraping_site})"
+    
     # Botones de acción (solo scraping aquí)
-    run_scraping = st.button("🚀 Ejecutar Scraping", type="primary", key="run_scraping_btn")
+    if scraping_active:
+        col_info, col_clear = st.columns([3, 1])
+        with col_info:
+            st.info(f"🔄 Scraping en progreso{site_info}... Puedes cancelar con el botón de abajo.")
+        with col_clear:
+            if st.button("🧹 Limpiar estado", help="Si el scraping está 'colgado', limpia el estado manualmente", key="clear_state_btn"):
+                clear_scraping_state()
+                st.session_state.scraping_in_progress = False
+                st.session_state.should_stop = False
+                st.session_state.current_scraping_site = ""
+                st.success("✅ Estado limpiado. Puedes iniciar un nuevo scraping.")
+                st.rerun()
+    
+    col_btn1, col_btn2 = st.columns([1, 1])
+    with col_btn1:
+        run_scraping = st.button(
+            "🚀 Ejecutar Scraping", 
+            type="primary", 
+            key="run_scraping_btn",
+            disabled=scraping_active
+        )
+    with col_btn2:
+        # El botón de cancelar SIEMPRE está habilitado si hay scraping activo
+        # Verificamos directamente el estado persistente JUSTO ANTES de renderizar
+        # para asegurar que funcione incluso si el estado se limpió al inicio
+        current_persistent_state = load_scraping_state()
+        cancel_enabled = (current_persistent_state and current_persistent_state.get("in_progress", False)) or st.session_state.scraping_in_progress
+        cancel_scraping = st.button(
+            "⏹️ Cancelar Scraping",
+            disabled=not cancel_enabled,
+            key="cancel_scraping_btn",
+            help="El scraping se detendrá casi inmediatamente (máximo 500ms)"
+        )
+    
+    if cancel_scraping:
+        # Actualizar estado persistente y de sesión
+        set_should_stop(True)
+        st.session_state.should_stop = True
+        # Mantener scraping_in_progress en True hasta que el proceso lo detecte
+        st.warning("⚠️ Cancelación solicitada. El proceso se detendrá en la siguiente verificación (puede tardar unos segundos mientras termina de procesar la página actual).")
+        # No hacer rerun aquí porque el scraping está en progreso y lo detectará
     
     if run_scraping:
         if not selected_site_for_scraping or selected_site_for_scraping == "(elige un sitio)":
@@ -1436,29 +1581,101 @@ with tab3:
         elif not urls_to_process:
             st.error("❌ Debes especificar al menos una URL para procesar.")
         else:
-            with st.spinner("Ejecutando scraping..."):
+            # Determinar el sitio desde las URLs
+            site_name = selected_site_for_scraping
+            if urls_to_process:
                 try:
-                    # Crear servicio de extracción
-                    key_manager = st.session_state.api_key_manager
-                    selected_model = GEMINI_CONFIG.get("model", "gemini-2.5-flash-lite")
-                    extraction_service = ExtractionService(
-                        api_key_manager=key_manager,
-                        model_name=selected_model
-                    )
-                    
-                    concursos = extraction_service.extract_from_urls(
-                        urls=urls_to_process,
-                        follow_pagination=follow_pagination,
-                        max_pages=max_pages
-                    )
+                    parsed = urlparse(urls_to_process[0])
+                    site_name = (parsed.netloc or parsed.path.split('/')[0]).replace("www.", "")
+                except Exception:
+                    pass
+            
+            # Resetear estado de cancelación y guardar estado persistente
+            # IMPORTANTE: Hacer esto ANTES de cualquier operación que pueda tardar
+            st.session_state.should_stop = False
+            st.session_state.scraping_in_progress = True
+            st.session_state.current_scraping_site = site_name
+            save_scraping_state(site_name, True, False)
+            
+            # Crear contenedores para mensajes de estado (usar empty para poder actualizar)
+            status_placeholder = st.empty()
+            status_placeholder.info("🔄 Iniciando scraping...")
+            
+            try:
+                # Crear servicio de extracción
+                key_manager = st.session_state.api_key_manager
+                selected_model = GEMINI_CONFIG.get("model", "gemini-2.5-flash-lite")
+                extraction_service = ExtractionService(
+                    api_key_manager=key_manager,
+                    model_name=selected_model
+                )
+                
+                # Callback para verificar si debe detenerse (lee del estado persistente)
+                def should_stop_callback():
+                    # Verificar tanto el estado de sesión como el persistente
+                    should_stop = st.session_state.should_stop or get_should_stop()
+                    # Si se canceló, actualizar UI
+                    if should_stop:
+                        try:
+                            status_placeholder.warning("⚠️ Cancelación detectada. Deteniendo proceso...")
+                        except:
+                            pass  # Ignorar errores de UI durante cancelación
+                    return should_stop
+                
+                # Callback para mostrar estado
+                status_messages = []
+                def status_callback(msg: str):
+                    status_messages.append(msg)
+                    if len(status_messages) > 10:  # Mantener solo los últimos 10
+                        status_messages.pop(0)
+                    # Actualizar estado persistente periódicamente
+                    save_scraping_state(site_name, True, get_should_stop())
+                    # Actualizar UI con el último mensaje
+                    if status_messages:
+                        last_msg = status_messages[-1]
+                        status_placeholder.info(f"🔄 {last_msg}")
+                
+                # Ejecutar scraping con callbacks
+                concursos = extraction_service.extract_from_urls(
+                    urls=urls_to_process,
+                    follow_pagination=follow_pagination,
+                    max_pages=max_pages,
+                    should_stop_callback=should_stop_callback,
+                    status_callback=status_callback
+                )
+                
+                # Limpiar placeholder y mostrar resultado final
+                status_placeholder.empty()
+                
+                was_cancelled = st.session_state.should_stop or get_should_stop()
+                if was_cancelled:
+                    st.warning("⚠️ Scraping cancelado por el usuario. Resultados parciales guardados.")
+                else:
                     st.success(f"✅ Scraping completado: {len(concursos)} concursos extraídos")
                     if concursos:
                         st.info(f"💡 Ve a la pestaña 'Explorar Concursos' para ver los resultados")
-                except RuntimeError as e:
-                    st.warning(str(e))
-                except Exception as e:
-                    st.error(f"❌ Error durante el scraping: {e}")
-                    logger.error(f"Error durante el scraping: {e}", exc_info=True)
+            except RuntimeError as e:
+                st.warning(str(e))
+                st.session_state.scraping_in_progress = False
+                st.session_state.should_stop = False
+                clear_scraping_state()
+            except KeyboardInterrupt:
+                st.warning("⚠️ Scraping interrumpido por el usuario.")
+                logger.info("Scraping interrumpido por KeyboardInterrupt")
+                st.session_state.scraping_in_progress = False
+                st.session_state.should_stop = False
+                clear_scraping_state()
+            except Exception as e:
+                st.error(f"❌ Error durante el scraping: {e}")
+                logger.error(f"Error durante el scraping: {e}", exc_info=True)
+                st.session_state.scraping_in_progress = False
+                st.session_state.should_stop = False
+                clear_scraping_state()
+            finally:
+                # Siempre resetear el estado al finalizar (doble seguridad)
+                st.session_state.scraping_in_progress = False
+                st.session_state.should_stop = False
+                clear_scraping_state()
     
     
 # ========== TAB 4: CONCURSOS MANUALES ==========
