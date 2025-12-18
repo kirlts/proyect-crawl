@@ -170,35 +170,8 @@ def sanitize_html(html: str, preserve_structure: bool = True) -> str:
         return html
 
 
-def extract_text_content(html: str) -> str:
-    """
-    Extrae solo el contenido de texto del HTML, eliminando todo el markup
-    
-    Args:
-        html: HTML a procesar
-        
-    Returns:
-        Texto plano extraído
-    """
-    if not html:
-        return ""
-    
-    try:
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Eliminar scripts y styles
-        for element in soup.find_all(['script', 'style', 'noscript']):
-            element.decompose()
-        
-        # Extraer texto preservando estructura básica
-        text = soup.get_text(separator='\n', strip=True)
-        
-        # Limpiar espacios múltiples
-        text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'\n\s*\n+', '\n', text)
-        
-        return text.strip()
-        
-    except Exception:
-        return html
+# Función no utilizada - removida para limpieza de código
+# def extract_text_content(html: str) -> str:
+#     """Extrae solo el contenido de texto del HTML, eliminando todo el markup"""
+#     ...
 

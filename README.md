@@ -1,152 +1,307 @@
-# 🔍 Buscador de Oportunidades de Financiamiento (MVP)
+# Buscador de Oportunidades de Financiamiento
 
-Herramienta de validación rápida para centralizar oportunidades de financiamiento para investigadores académicos en Chile.
+Sistema de extracción, almacenamiento y predicción de concursos de financiamiento para investigación académica en Chile.
 
-## 🎯 Características
+## Características
 
-- **Scraping Inteligente**: Usa Crawl4AI para manejar sitios dinámicos con JavaScript
-- **Extracción con IA**: Utiliza Gemini Flash 2.5 para extraer información estructurada
-- **Predicción de Aperturas**: Estima fechas de próxima apertura basándose en patrones históricos
-- **Interfaz Simple**: UI con Streamlit para fácil uso
-- **Persistencia Local**: Guarda resultados en JSON y CSV
+- **Scraping multi-sitio**: Soporte para ANID, Centro Estudios MINEDUC, CNA y DFI MINEDUC
+- **Extracción con LLM**: Usa Google Gemini para extraer información estructurada de páginas web
+- **Predicción de fechas**: Estima fechas de próxima apertura basándose en versiones históricas
+- **Interfaz web**: Aplicación Streamlit con 5 pestañas organizadas
+- **Persistencia**: Historial por sitio, cache de páginas, predicciones
+- **Despliegue**: Dockerizado y listo para AWS EC2
 
-## 📋 Requisitos
+## Requisitos
 
-- Python 3.8+
-- API Key de Google AI Studio (Gemini)
+- Python 3.12+
+- API Key(s) de Google Gemini
+- Docker (opcional, para despliegue)
 
-## 🚀 Instalación
+## Instalación
 
-1. **Clonar o descargar el proyecto**
+### Desarrollo Local
 
-2. **Instalar dependencias:**
+1. Clonar el repositorio:
+```bash
+git clone <repo-url>
+cd proyect-crawl
+```
+
+2. Crear entorno virtual:
+```bash
+python -m venv venv
+source venv/bin/activate  # En Windows: venv\Scripts\activate
+```
+
+3. Instalar dependencias:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. **Configurar Crawl4AI:**
+4. Instalar navegadores de Playwright:
 ```bash
-crawl4ai-setup
+python -m playwright install-deps chromium
+python -m playwright install chromium
 ```
 
-4. **Verificar instalación (opcional):**
+5. Configurar API keys:
 ```bash
-crawl4ai-doctor
+# Crear archivo data/.api_keys.json
+{
+  "gemini": {
+    "keys": [
+      {"key": "TU_API_KEY_AQUI", "name": "Key 1", "is_active": true}
+    ],
+    "current_index": 0
+  }
+}
 ```
 
-## 🔧 Configuración
-
-1. **Obtener API Key de Gemini:**
-   - Ve a https://aistudio.google.com/
-   - Crea un proyecto y obtén tu API key
-
-2. **Seleccionar Modelo LLM:**
-   - En la interfaz Streamlit, usa el selector de modelos en la barra lateral
-   - **Recomendado para Free Tier:** `gemini-2.5-flash-lite` (más económico)
-   - Todos los modelos disponibles están marcados con 🆓 si son compatibles con Free Tier
-
-3. **Configurar URLs (opcional):**
-   - Edita `config.py` para agregar o modificar URLs semilla
-
-## 💻 Uso
-
-1. **Ejecutar la aplicación:**
+6. Ejecutar aplicación:
 ```bash
 streamlit run main.py
 ```
 
-2. **En la interfaz:**
-   - Ingresa tu API Key de Gemini en la barra lateral
-   - **Selecciona el modelo LLM** (recomendado: Flash Lite para free tier)
-   - Selecciona los sitios a procesar o ingresa URLs personalizadas
-   - Presiona "Iniciar Crawling"
-   - Espera a que se procesen las URLs
-   - Filtra y explora los resultados
-   - Guarda o exporta los datos
+### Docker
 
-## 📁 Estructura del Proyecto
+1. Construir imagen:
+```bash
+docker build -t proyect-crawl .
+```
+
+2. Ejecutar con Docker Compose:
+```bash
+docker-compose up
+```
+
+3. Acceder en `http://localhost:8501`
+
+## Configuración
+
+### Variables de Entorno
+
+Crear archivo `.env`:
+```bash
+API_KEYS_PATH=data/.api_keys.json
+DATA_DIR=data
+PORT=8501
+```
+
+### API Keys
+
+El sistema soporta múltiples API keys con rotación automática. Agregar keys en `data/.api_keys.json`:
+
+```json
+{
+  "gemini": {
+    "keys": [
+      {"key": "AIza...", "name": "Key 1", "is_active": true},
+      {"key": "AIza...", "name": "Key 2", "is_active": true}
+    ],
+    "current_index": 0
+  }
+}
+```
+
+### Modelos LLM
+
+Modelos recomendados para Free Tier:
+- `gemini-2.5-flash-lite` (recomendado)
+- `gemini-2.5-flash-lite-preview-09-2025`
+
+Seleccionar modelo desde la pestaña "Scraping y Configuración" en la UI.
+
+## Uso
+
+### Interfaz Web
+
+La aplicación tiene 5 pestañas:
+
+1. **Visualización**: Lista unificada de todos los concursos con filtros avanzados
+2. **Explorar Concursos**: Ver y gestionar concursos por sitio
+3. **Predicciones**: Generar y ver predicciones de fechas de apertura
+4. **Scraping y Configuración**: Ejecutar scraping y configurar API keys/modelos
+5. **Concursos Manuales**: Agregar concursos que no provienen de scraping
+
+### Scraping
+
+1. Ir a pestaña "Scraping y Configuración"
+2. Seleccionar sitio a scrapear
+3. Configurar número de páginas (máximo)
+4. Presionar "Iniciar Scraping"
+5. El sistema procesará las URLs y extraerá concursos
+
+### Predicciones
+
+1. Ir a pestaña "Predicciones"
+2. Seleccionar sitio
+3. Aplicar filtros (opcional)
+4. Presionar "Generar Predicciones"
+5. Ver resultados en la tabla
+
+### Concursos Manuales
+
+1. Ir a pestaña "Concursos Manuales"
+2. Completar formulario con datos del concurso
+3. Validar que fecha de cierre > fecha de apertura
+4. Presionar "Agregar Concurso"
+5. El sistema asignará predicción automática (+1 año)
+
+## Automatización
+
+### Cron Diario (EC2)
+
+El sistema incluye un script para scraping diario de ANID:
+
+```bash
+# Agregar a crontab
+0 6 * * * /home/ubuntu/proyect-crawl/scripts/run_daily_anid.sh
+```
+
+El script:
+1. Hace scraping de ANID (máximo 2 páginas)
+2. Genera predicciones para nuevos concursos
+3. Registra logs en `data/logs/daily_anid.log`
+
+## Estructura del Proyecto
 
 ```
 proyect-crawl/
-├── main.py                 # Aplicación Streamlit
-├── config.py              # Configuración centralizada
-├── requirements.txt       # Dependencias
-├── crawler/              # Módulo de scraping
-│   ├── scraper.py
-│   └── markdown_processor.py
-├── llm/                  # Módulo de integración LLM
-│   ├── gemini_client.py
-│   └── prompts.py
-├── utils/                # Utilidades
-│   ├── date_parser.py
-│   └── file_manager.py
-└── data/                 # Datos (se crea automáticamente)
-    ├── raw/
-    ├── processed/
-    └── cache/
+├── main.py                      # Aplicación Streamlit
+├── config.py                    # Configuración (wrapper)
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+│
+├── config/
+│   ├── global_config.py         # Parámetros globales
+│   └── sites.py                 # Configuración por sitio
+│
+├── models/
+│   ├── concurso.py              # Modelo Concurso
+│   └── prediccion.py            # Modelos de predicción
+│
+├── services/
+│   ├── extraction_service.py   # Orquestación scraping + extracción
+│   └── prediction_service.py    # Generación de predicciones
+│
+├── crawler/
+│   ├── scraper.py               # WebScraper principal
+│   ├── strategies/              # Estrategias por sitio
+│   └── pagination/              # Lógica de paginación
+│
+├── llm/
+│   ├── gemini_client.py         # Cliente REST Gemini
+│   ├── prompts.py               # Templates de prompts
+│   ├── predictor.py             # Lógica de predicción
+│   └── extractors/
+│       └── llm_extractor.py     # Extracción con LLM
+│
+├── utils/
+│   ├── api_key_manager.py       # Rotación de API keys
+│   ├── history_manager.py       # Gestión de historial
+│   ├── file_manager.py          # Persistencia
+│   ├── lock_manager.py          # Locks para concurrencia
+│   ├── scraping_state.py        # Estado persistente
+│   └── extractors/              # Extractores específicos
+│
+├── scripts/
+│   ├── daily_anid.py            # Script scraping diario
+│   └── run_daily_anid.sh        # Wrapper para cron
+│
+└── data/                        # Generado en runtime
+    ├── history/                 # Historial por sitio
+    ├── predictions/             # Predicciones
+    ├── raw_pages/               # Cache HTML/Markdown
+    └── debug/                   # Logs de ejecución
 ```
 
-## 🎨 Sitios Objetivo
+## Despliegue en AWS
 
-- **ANID**: anid.cl (excluyendo capital humano)
-- **Centro Estudios MINEDUC**: centroestudios.mineduc.cl
-- **CNA**: cnachile.cl
-- **DFI MINEDUC**: dfi.mineduc.cl
+### Requisitos
 
-## 📊 Formato de Datos
+- Instancia EC2 (t3.medium o superior)
+- Security group con puerto 8501 abierto
+- IP elástica asignada
+- Docker y docker-compose instalados
 
-Cada concurso extraído contiene:
+### Pasos
 
-- `nombre`: Nombre del concurso (REQUERIDO)
-- `organismo`: Organismo que administra el concurso (REQUERIDO, ej: "ANID", "MINEDUC", "CNA")
-- `fecha_apertura`: Fecha de apertura normalizada (formato: YYYY-MM-DD)
-- `fecha_cierre`: Fecha de cierre normalizada (formato: YYYY-MM-DD)
-- `fecha_apertura_original`: Texto original de la fecha de apertura
-- `financiamiento`: Monto o tipo de financiamiento disponible
-- `url`: URL de origen donde se encontró el concurso (REQUERIDO)
-- `estado`: "Abierto", "Cerrado", "Suspendido" o "Próximo" (calculado automáticamente)
-- `descripcion`: Resumen breve del concurso
-- `subdireccion`: Subdirección o área del organismo (ej: "Capital Humano", "Investigación Aplicada")
-- `predicted_opening`: Fecha estimada de próxima apertura (si aplica, generada por análisis histórico)
+1. Configurar secrets en GitHub:
+   - `AWS_ACCESS_KEY_ID`
+   - `AWS_SECRET_ACCESS_KEY`
+   - `AWS_REGION`
+   - `ECR_REPOSITORY`
+   - `SSH_HOST` (IP de EC2)
+   - `SSH_USER` (usualmente `ubuntu`)
+   - `SSH_KEY` (clave privada PEM)
+   - `SSH_PORT` (usualmente `22`)
 
-## 🔍 Filtros Disponibles
+2. Push a `main` o `master` activa el workflow de GitHub Actions
 
-- **Todos**: Muestra todos los concursos
-- **Abiertos Ahora**: Solo concursos actualmente abiertos
-- **Próxima Apertura**: Concursos con fecha estimada de apertura
-- **Cerrados**: Solo concursos cerrados
+3. El workflow:
+   - Construye imagen Docker
+   - Push a ECR
+   - SSH a EC2
+   - Pull y reinicio de contenedor
 
-## 💾 Exportación
+### Configuración Manual en EC2
 
-- **JSON**: Guarda resultados completos en formato JSON
-- **CSV**: Exporta a CSV para análisis en Excel/Google Sheets
+```bash
+# Conectar por SSH
+ssh -i key.pem ubuntu@<IP-EC2>
 
-## ⚠️ Notas
+# Crear directorio
+mkdir -p ~/proyect-crawl/data
 
-- Este es un **MVP** (Minimum Viable Product)
-- La predicción de aperturas es una estimación basada en patrones
-- Algunos sitios pueden requerir ajustes en la configuración de scraping
-- El procesamiento puede tardar varios minutos dependiendo del número de URLs
+# Crear .env
+cat > ~/proyect-crawl/.env <<'EOF'
+API_KEYS_PATH=data/.api_keys.json
+DATA_DIR=data
+PORT=8501
+EOF
 
-## 🐛 Solución de Problemas
+# Copiar API keys
+scp -i key.pem data/.api_keys.json ubuntu@<IP-EC2>:~/proyect-crawl/data/.api_keys.json
+```
 
-**Error al instalar Crawl4AI:**
-- Ejecuta `crawl4ai-setup` y sigue las instrucciones
-- En Linux, puede requerir dependencias del sistema
+## Solución de Problemas
 
-**Timeout en scraping:**
-- Aumenta `page_timeout` en `config.py`
-- Algunos sitios pueden estar lentos o inaccesibles
+### Error: "BrowserType.launch: Executable doesn't exist"
 
-**Error con Gemini (429 Quota Exceeded):**
-- Verifica que tu API key sea válida
-- **Usa un modelo compatible con Free Tier** (marcados con 🆓)
-- **Recomendado:** `gemini-2.5-flash-lite` o `gemini-2.5-flash-lite-preview-09-2025`
-- Evita modelos experimentales que no aparecen en la documentación oficial
-- Revisa los límites de cuota en Google AI Studio
-- Si usas un modelo experimental, puede que no esté disponible en free tier
+```bash
+python -m playwright install-deps chromium
+python -m playwright install chromium
+```
 
-## 📝 Licencia
+### Error: "429 Quota Exceeded"
 
-Este es un proyecto MVP para uso interno.
+- Verificar que las API keys sean válidas
+- Usar modelo compatible con Free Tier (`gemini-2.5-flash-lite`)
+- El sistema rota automáticamente a la siguiente key disponible
 
+### Error: "Operación concurrente en curso"
+
+- Esperar a que termine el scraping/predicción actual
+- Si persiste, limpiar locks en `data/locks/`
+
+### Error: "no space left on device" (EC2)
+
+```bash
+# Limpiar imágenes Docker no usadas
+docker system prune -af --volumes
+```
+
+### El botón "Cancelar Scraping" no funciona
+
+- Verificar que el estado persistente esté activo
+- Limpiar estado en `data/scraping_state/` si está corrupto
+
+## Documentación
+
+- **Arquitectura**: Ver `docs/ARQUITECTURA.md` para detalles técnicos completos
+- **Agregar nuevo sitio**: Ver sección "Agregar un Nuevo Sitio" en `docs/ARQUITECTURA.md`
+
+## Licencia
+
+Proyecto de práctica profesional - uso interno.
