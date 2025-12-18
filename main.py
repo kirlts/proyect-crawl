@@ -260,6 +260,15 @@ with tab0:
     if not all_items:
         st.info("No hay concursos cargados aún. Ejecuta scraping o agrega manuales.")
     else:
+        # Cargar todas las predicciones de todos los sitios
+        predictions_map = {}  # URL -> predicción
+        for display, site_name in site_map.items():
+            predictions = load_predictions(site_name)
+            for pred in predictions:
+                url = pred.get("concurso_url", "")
+                if url:
+                    predictions_map[url] = pred
+        
         # Preparar filtros
         estados = sorted({c.get("estado", "") for c in all_items if c.get("estado")})
         organismos = sorted({c.get("organismo", "") for c in all_items if c.get("organismo")})
@@ -274,11 +283,18 @@ with tab0:
         with col_c:
             filtro_fuente = st.selectbox("Fuente", options=["(todas)"] + fuentes, index=0, key="vis_fuente")
         
-        col_d, col_e = st.columns(2)
+        col_d, col_e, col_f = st.columns(3)
         with col_d:
             filtro_subdir = st.selectbox("Subdirección", options=["(todas)"] + subdirs, index=0, key="vis_subdir")
         with col_e:
             filtro_texto = st.text_input("Buscar por nombre", key="vis_buscar")
+        with col_f:
+            filtro_prediccion = st.selectbox(
+                "Predicción", 
+                options=["(todas)", "Con predicción", "Sin predicción"], 
+                index=0, 
+                key="vis_prediccion"
+            )
         
         filtrados = all_items
         if filtro_estado != "(todos)":
@@ -292,11 +308,19 @@ with tab0:
         if filtro_texto:
             t = filtro_texto.lower().strip()
             filtrados = [c for c in filtrados if t in (c.get("nombre", "").lower())]
+        if filtro_prediccion == "Con predicción":
+            filtrados = [c for c in filtrados if c.get("url", "") in predictions_map]
+        elif filtro_prediccion == "Sin predicción":
+            filtrados = [c for c in filtrados if c.get("url", "") not in predictions_map]
         
         st.info(f"Mostrando {len(filtrados)} concursos filtrados (de {len(all_items)}).")
         
         table_data = []
         for c in filtrados:
+            url = c.get("url", "")
+            pred = predictions_map.get(url)
+            fecha_predicha = pred.get("fecha_predicha", "") if pred else ""
+            
             table_data.append({
                 "Nombre": c.get("nombre", ""),
                 "Estado": c.get("estado", ""),
@@ -305,7 +329,8 @@ with tab0:
                 "Fuente": c.get("fuente", ""),
                 "Fecha Apertura": c.get("fecha_apertura", ""),
                 "Fecha Cierre": c.get("fecha_cierre", ""),
-                "URL": c.get("url", ""),
+                "Predicción": fecha_predicha,
+                "URL": url,
             })
         st.dataframe(
             pd.DataFrame(table_data),
